@@ -151,8 +151,11 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .top-header {
   position: sticky; z-index: 25; top: 0; display: flex; height: var(--header);
   align-items: center; justify-content: space-between; gap: 20px; padding: 10px 26px;
-  background: rgba(255,255,255,.88); box-shadow: 0 3px 13px rgba(70,58,48,.1);
-  backdrop-filter: blur(10px);
+  background: rgba(255, 252, 247, .52);
+  border-bottom: 1px solid rgba(255, 255, 255, .58);
+  box-shadow: 0 5px 18px rgba(70, 58, 48, .08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
 }
 .menu-toggle {
   display: none; width: 42px; height: 42px; flex: 0 0 auto; border: 0;
