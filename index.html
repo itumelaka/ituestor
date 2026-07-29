@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Dashboard prototaip ITU eSTOR, Institut Teknologi Unggas.">
+  <meta name="theme-color" content="#1556a0">
+  <title>Dashboard | ITU eSTOR</title>
+  <link rel="stylesheet" href="./assets/css/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Navigasi utama">
+      <div class="brand" aria-label="ITU eSTOR">
+        <span class="brand-mascot" aria-hidden="true">👨‍🔧</span>
+        <span class="brand-word">
+          <b><i>ITU</i> eSTOR</b>
+          <small>INSTITUT TEKNOLOGI UNGGAS</small>
+        </span>
+      </div>
+
+      <nav class="main-nav" aria-label="Menu sistem">
+        <a class="nav-link active" href="#dashboard" aria-current="page"><span>🏠</span>Dashboard</a>
+        <a class="nav-link" href="#daftar-item"><span>📋</span>Daftar Item</a>
+        <a class="nav-link" href="#barang-masuk"><span>📥</span>Barang Masuk</a>
+        <a class="nav-link" href="#barang-keluar"><span>📤</span>Barang Keluar</a>
+        <a class="nav-link" href="#permohonan"><span>📝</span>Permohonan</a>
+        <a class="nav-link" href="#stok-semasa"><span>📦</span>Stok Semasa</a>
+        <a class="nav-link" href="#laporan"><span>📊</span>Laporan</a>
+        <a class="nav-link" href="#carian"><span>🔍</span>Carian</a>
+        <a class="nav-link" href="#pengguna"><span>👥</span>Pengguna</a>
+        <a class="nav-link" href="#tetapan"><span>⚙️</span>Tetapan</a>
+      </nav>
+
+      <div class="store-scene" aria-label="Ilustrasi bangunan stor">
+        <div class="store-roof"></div>
+        <div class="store-building"><b>STOR</b><span></span><i></i></div>
+        <div class="store-box box-a"></div>
+        <div class="store-box box-b"></div>
+        <div class="store-tree tree-a">♣</div>
+        <div class="store-tree tree-b">♣</div>
+      </div>
+      <p class="sidebar-footer">SISTEM PENGURUSAN<br>STOK &amp; BEKALAN</p>
+      <span class="version">v1.0.0</span>
+    </aside>
+
+    <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+
+    <div class="workspace">
+      <header class="top-header">
+        <button class="menu-toggle" id="menuToggle" type="button" aria-label="Buka menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+        <div class="institution-block">
+          <span class="kpkm-logo-crop">
+            <img src="./assets/images/logo-kpkm.png" alt="Logo rasmi Kementerian Pertanian dan Keterjaminan Makanan">
+          </span>
+          <p>KEMENTERIAN PERTANIAN<br>DAN KETERJAMINAN MAKANAN</p>
+          <span class="divider"></span>
+          <span class="itu-logo-crop">
+            <img src="./assets/images/logo-itu.png" alt="Logo rasmi Institut Teknologi Unggas">
+          </span>
+        </div>
+        <div class="header-tools">
+          <label class="search">
+            <span class="sr-only">Cari item, transaksi atau penerima</span>
+            <input id="dashboardSearch" type="search" placeholder="Cari item, transaksi, penerima..." autocomplete="off">
+            <span aria-hidden="true">⌕</span>
+          </label>
+          <button class="notification" type="button" aria-label="3 pemberitahuan">
+            <span aria-hidden="true">🔔</span><b>3</b>
+          </button>
+          <div class="profile">
+            <span class="avatar" aria-hidden="true">IM</span>
+            <p><strong>ITU Melaka</strong><small>SUPER ADMIN</small></p>
+          </div>
+        </div>
+      </header>
+
+      <main id="dashboard">
+        <section class="hero" aria-label="Identiti ITU eSTOR">
+          <img src="./assets/images/ituestor-header.png" alt="ITU eSTOR dengan petugas stor lelaki dan wanita, kotak inventori serta identiti Institut Teknologi Unggas">
+        </section>
+
+        <section class="stats" aria-label="Statistik stok">
+          <article class="stat blue"><div><span>JUMLAH ITEM</span><strong>352</strong><small>Jenis Item</small></div><i>📋</i></article>
+          <article class="stat green"><div><span>NILAI STOK SEMASA</span><strong>RM 124,560.35</strong><small>Jumlah Nilai (RM)</small></div><i>💵</i></article>
+          <article class="stat yellow"><div><span>STOK RENDAH</span><strong>18</strong><small>Item</small></div><i>⚠️</i></article>
+          <article class="stat red"><div><span>STOK HABIS</span><strong>7</strong><small>Item</small></div><i>❌</i></article>
+          <article class="stat purple"><div><span>PERMOHONAN MENUNGGU</span><strong>6</strong><small>Permohonan</small></div><i>📋</i></article>
+          <article class="stat sky"><div><span>TRANSAKSI HARI INI</span><strong>12</strong><small>Transaksi</small></div><i>↕️</i></article>
+        </section>
+
+        <section class="panel-grid">
+          <article class="panel category-panel" id="stok-semasa">
+            <h3>RINGKASAN STOK MENGIKUT KATEGORI</h3>
+            <div class="category-body">
+              <div class="donut" role="img" aria-label="Carta donut 352 item mengikut kategori">
+                <div><strong>352</strong><small>JUMLAH</small></div>
+              </div>
+              <ul class="legend">
+                <li><i class="dot dot-blue"></i><span>Alat Tulis<strong>142 (40%)</strong></span></li>
+                <li><i class="dot dot-green"></i><span>Bahan Kimia<strong>96 (27%)</strong></span></li>
+                <li><i class="dot dot-yellow"></i><span>House Hold<strong>74 (21%)</strong></span></li>
+                <li><i class="dot dot-red"></i><span>Lain-lain<strong>40 (12%)</strong></span></li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="panel low-stock">
+            <h3>STOK RENDAH &amp; HABIS</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>ITEM</th><th>KATEGORI</th><th>BAKI</th><th>STATUS</th></tr></thead>
+                <tbody>
+                  <tr><td>Pen Marker Hitam</td><td>Alat Tulis</td><td>2</td><td><b class="status-low">RENDAH</b></td></tr>
+                  <tr><td>Kertas A4 80gsm</td><td>Alat Tulis</td><td>4</td><td><b class="status-low">RENDAH</b></td></tr>
+                  <tr><td>Hand Sanitizer 500ml</td><td>Bahan Kimia</td><td>1</td><td><b class="status-low">RENDAH</b></td></tr>
+                  <tr><td>Klorin Serbuk 1kg</td><td>Bahan Kimia</td><td>0</td><td><b class="status-out">HABIS</b></td></tr>
+                  <tr><td>Bateri AA</td><td>Lain-lain</td><td>0</td><td><b class="status-out">HABIS</b></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <a href="#stok-semasa">Lihat semua</a>
+          </article>
+
+          <article class="panel recent">
+            <h3>TRANSAKSI TERKINI</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>TARIKH &amp; MASA</th><th>JENIS</th><th>ITEM</th><th>KUANTITI</th><th>OLEH</th></tr></thead>
+                <tbody>
+                  <tr><td>28/07/2026 10:15</td><td><b class="arrow down">↓</b></td><td>Pen Merah</td><td>2</td><td>ITU Melaka</td></tr>
+                  <tr><td>28/07/2026 09:42</td><td><b class="arrow down">↓</b></td><td>Kertas A4 80gsm</td><td>1</td><td>Siti Hajar</td></tr>
+                  <tr><td>28/07/2026 09:10</td><td><b class="arrow up">↑</b></td><td>Hand Sanitizer 500ml</td><td>10</td><td>Admin Stor</td></tr>
+                  <tr><td>28/07/2026 08:55</td><td><b class="arrow down">↓</b></td><td>Pen Biru</td><td>3</td><td>Mohd Razak</td></tr>
+                  <tr><td>28/07/2026 08:30</td><td><b class="arrow up">↑</b></td><td>Klorin Serbuk 1kg</td><td>20</td><td>Admin Stor</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <a href="#transaksi">Lihat semua transaksi</a>
+          </article>
+        </section>
+
+        <section class="quick-panel" aria-labelledby="quick-title">
+          <h3 id="quick-title">PINTASAN PANTAS</h3>
+          <div class="quick-row">
+            <button class="quick quick-blue" type="button"><i>📥</i><span>BARANG<br>MASUK</span></button>
+            <button class="quick quick-green" type="button"><i>📤</i><span>BARANG<br>KELUAR</span></button>
+            <button class="quick quick-yellow" type="button"><i>📋</i><span>PERMOHONAN<br>BARU</span></button>
+            <button class="quick quick-purple" type="button"><i>📊</i><span>LAPORAN</span></button>
+            <button class="quick quick-sky" type="button"><i>🔍</i><span>CARI ITEM</span></button>
+            <button class="quick quick-mint" type="button"><i>▦</i><span>IMBAS QR ITEM</span></button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <button class="help-button" type="button" aria-label="Bantuan"><b>?</b><span>BANTUAN</span></button>
+  <script src="./assets/js/app.js"></script>
+</body>
+</html>
