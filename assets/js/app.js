@@ -7,11 +7,16 @@ const navLinks = document.querySelectorAll(".nav-link");
 const searchInput = document.getElementById("dashboardSearch");
 const searchBox = searchInput.closest(".search");
 const API_URL = "https://ituestor-api.itumelaka.workers.dev/api/items";
+const SUPABASE_URL = "https://tzsykhjfhmctasjscwch.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy";
 const chartColors = ["#2777c7", "#51a83c", "#ffc313", "#ed4938", "#8a62b8", "#40a5af"];
 const ITEMS_PER_PAGE = 20;
 let loadedItems = [];
 let registerPage = 1;
 let lastFocusedItem = null;
+let inventoryRequest = null;
+let inventoryLoaded = false;
+let supabaseClient = null;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -46,7 +51,18 @@ const elements = {
   itemModal: document.getElementById("itemModal"),
   itemModalTitle: document.getElementById("itemModalTitle"),
   itemDetails: document.getElementById("itemDetails"),
-  closeItemModal: document.getElementById("closeItemModal")
+  closeItemModal: document.getElementById("closeItemModal"),
+  authGate: document.getElementById("authGate"),
+  authState: document.getElementById("authState"),
+  authStateMessage: document.getElementById("authStateMessage"),
+  googleLogin: document.getElementById("googleLogin"),
+  authRetry: document.getElementById("authRetry"),
+  userProfile: document.getElementById("userProfile"),
+  userAvatarFallback: document.getElementById("userAvatarFallback"),
+  userAvatarImage: document.getElementById("userAvatarImage"),
+  userName: document.getElementById("userName"),
+  userEmail: document.getElementById("userEmail"),
+  logoutButton: document.getElementById("logoutButton")
 };
 
 const currencyFormatter = new Intl.NumberFormat("ms-MY", {
@@ -355,6 +371,161 @@ function closeItemDetails() {
   if (lastFocusedItem) lastFocusedItem.focus();
 }
 
+function setAuthState(state, message) {
+  elements.authState.className = `auth-state is-${state}`;
+  elements.authStateMessage.textContent = message;
+  elements.googleLogin.hidden = state === "loading";
+  elements.authRetry.hidden = state !== "error";
+}
+
+function redirectUrl() {
+  if (window.location.hostname === "itumelaka.github.io") {
+    return "https://itumelaka.github.io/ituestor/";
+  }
+  const path = window.location.pathname.endsWith("/")
+    ? window.location.pathname
+    : window.location.pathname.slice(0, window.location.pathname.lastIndexOf("/") + 1);
+  return `${window.location.origin}${path}`;
+}
+
+function hasOAuthParameters() {
+  const parameters = new URLSearchParams(window.location.search);
+  return ["code", "error", "error_code", "error_description"].some((key) => parameters.has(key)) ||
+    /(?:^#|&)(?:access_token|refresh_token|error|error_code|error_description)=/.test(window.location.hash);
+}
+
+function cleanOAuthUrl() {
+  if (!hasOAuthParameters()) return;
+  const url = new URL(window.location.href);
+  ["code", "error", "error_code", "error_description"].forEach((key) => url.searchParams.delete(key));
+  if (/(?:access_token|refresh_token|error|error_code|error_description)=/.test(url.hash)) url.hash = "";
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+}
+
+function userInitials(name, email) {
+  const source = name || email || "Pengguna";
+  const words = source.trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((word) => word[0]).join("").toLocaleUpperCase("ms") || "P";
+}
+
+function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
+  document.body.className = "auth-signed-out";
+  elements.userProfile.hidden = true;
+  elements.googleLogin.disabled = false;
+  setAuthState("signed-out", message);
+}
+
+function showSignedIn(session) {
+  const user = session?.user;
+  if (!user) {
+    showSignedOut();
+    return;
+  }
+  const metadata = user.user_metadata || {};
+  const name = metadata.full_name || metadata.name || metadata.user_name || "Pengguna Google";
+  const email = user.email || "E-mel tidak tersedia";
+  const avatarUrl = metadata.avatar_url || metadata.picture || "";
+  elements.userName.textContent = name;
+  elements.userEmail.textContent = email;
+  elements.userAvatarFallback.textContent = userInitials(name, email);
+  elements.userAvatarFallback.hidden = Boolean(avatarUrl);
+  elements.userAvatarImage.hidden = !avatarUrl;
+  elements.userAvatarImage.src = avatarUrl;
+  elements.userAvatarImage.alt = avatarUrl ? `Foto profil ${name}` : "";
+  elements.userProfile.hidden = false;
+  document.body.className = "auth-signed-in";
+  cleanOAuthUrl();
+  ensureInventoryData();
+}
+
+async function signInWithGoogle() {
+  if (!supabaseClient) {
+    setAuthState("error", "Perkhidmatan log masuk tidak dapat dimulakan.");
+    return;
+  }
+  elements.googleLogin.disabled = true;
+  setAuthState("loading", "Membuka log masuk Google…");
+  try {
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: redirectUrl() }
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Log masuk Google gagal dimulakan.");
+    elements.googleLogin.disabled = false;
+    setAuthState("error", "Log masuk Google tidak dapat dimulakan. Sila cuba lagi.");
+  }
+}
+
+async function signOut() {
+  if (!supabaseClient) return;
+  elements.logoutButton.disabled = true;
+  elements.logoutButton.textContent = "Sedang keluar…";
+  let error = null;
+  try {
+    ({ error } = await supabaseClient.auth.signOut());
+  } catch (signOutError) {
+    error = signOutError;
+  }
+  elements.logoutButton.disabled = false;
+  elements.logoutButton.textContent = "Log keluar";
+  if (error) {
+    console.error("Log keluar gagal.");
+    elements.logoutButton.title = "Log keluar gagal. Sila cuba lagi.";
+  } else {
+    elements.logoutButton.removeAttribute("title");
+  }
+}
+
+async function initializeAuth() {
+  setAuthState("loading", "Menyemak sesi anda…");
+  if (!window.supabase || typeof window.supabase.createClient !== "function") {
+    setAuthState("error", "Perkhidmatan log masuk gagal dimuatkan. Semak sambungan dan cuba lagi.");
+    return;
+  }
+  if (!supabaseClient) {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      }
+    });
+    supabaseClient.auth.onAuthStateChange((_event, session) => {
+      if (session) showSignedIn(session);
+      else showSignedOut();
+    });
+  }
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (data.session) showSignedIn(data.session);
+    else {
+      const oauthError = new URLSearchParams(window.location.search).has("error") ||
+        /(?:^#|&)error=/.test(window.location.hash);
+      if (oauthError) {
+        cleanOAuthUrl();
+        showSignedOut("Log masuk Google tidak berjaya. Sila cuba lagi.");
+      } else {
+        showSignedOut();
+      }
+    }
+  } catch (error) {
+    console.error("Sesi pengguna gagal dipulihkan.");
+    cleanOAuthUrl();
+    setAuthState("error", "Sesi anda tidak dapat disemak. Sila cuba lagi.");
+  }
+}
+
+function ensureInventoryData() {
+  if (inventoryLoaded || inventoryRequest) return inventoryRequest;
+  inventoryRequest = loadDashboardData().finally(() => {
+    inventoryRequest = null;
+  });
+  return inventoryRequest;
+}
+
 async function loadDashboardData() {
   setDataState("loading", "Memuatkan data stok sebenar…");
   try {
@@ -363,6 +534,7 @@ async function loadDashboardData() {
     const data = await response.json();
     if (data.success !== true || !Array.isArray(data.items)) throw new Error("Respons API tidak sah");
     loadedItems = data.items.slice();
+    inventoryLoaded = true;
     renderDashboard(loadedItems, data.count);
     populateRegisterFilters();
     renderRegister();
@@ -371,6 +543,7 @@ async function loadDashboardData() {
   } catch (error) {
     console.error("Data dashboard gagal dimuatkan:", error);
     loadedItems = [];
+    inventoryLoaded = false;
     renderRegister();
     setDataState("error", "Data stok tidak dapat dimuatkan buat masa ini.");
     setRegisterState("error", "Daftar item tidak dapat dimuatkan buat masa ini.");
@@ -462,6 +635,16 @@ elements.closeItemModal.addEventListener("click", closeItemDetails);
 elements.itemModal.addEventListener("click", (event) => {
   if (event.target === elements.itemModal) closeItemDetails();
 });
+elements.googleLogin.addEventListener("click", signInWithGoogle);
+elements.logoutButton.addEventListener("click", signOut);
+elements.authRetry.addEventListener("click", () => {
+  if (!window.supabase) window.location.reload();
+  else initializeAuth();
+});
+elements.userAvatarImage.addEventListener("error", () => {
+  elements.userAvatarImage.hidden = true;
+  elements.userAvatarFallback.hidden = false;
+});
 window.addEventListener("hashchange", () => showView(window.location.hash));
 showView(window.location.hash);
-loadDashboardData();
+initializeAuth();

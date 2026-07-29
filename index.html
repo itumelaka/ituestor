@@ -8,7 +8,29 @@
   <title>Dashboard | ITU eSTOR</title>
   <link rel="stylesheet" href="./assets/css/style.css">
 </head>
-<body>
+<body class="auth-pending">
+  <section class="auth-gate" id="authGate" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <div class="auth-brand" aria-hidden="true">
+        <span>👨‍🔧</span>
+        <strong><i>ITU</i> eSTOR</strong>
+      </div>
+      <p class="eyebrow">SISTEM PENGURUSAN STOK &amp; BEKALAN</p>
+      <h1 id="authTitle">Selamat datang</h1>
+      <p class="auth-intro">Log masuk menggunakan akaun Google untuk mengakses dashboard ITU eSTOR.</p>
+      <div class="auth-state is-loading" id="authState" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span id="authStateMessage">Menyemak sesi anda…</span>
+      </div>
+      <button class="google-login" id="googleLogin" type="button" hidden>
+        <span aria-hidden="true">G</span>
+        Log masuk dengan Google
+      </button>
+      <button class="auth-retry" id="authRetry" type="button" hidden>Cuba lagi</button>
+      <small>Akses aplikasi tertakluk pada pengesahan pengguna. Log masuk tidak memberikan peranan pentadbir.</small>
+    </div>
+  </section>
+
   <div class="app">
     <aside class="sidebar" id="sidebar" aria-label="Navigasi utama">
       <div class="brand" aria-label="ITU eSTOR">
@@ -58,9 +80,15 @@
           <button class="notification" type="button" aria-label="Pemberitahuan belum diaktifkan">
             <span aria-hidden="true">🔔</span>
           </button>
-          <div class="profile">
-            <span class="avatar" aria-hidden="true">IM</span>
-            <p><strong>ITU Melaka</strong><small>SUPER ADMIN</small></p>
+          <div class="profile" id="userProfile" hidden>
+            <span class="avatar" id="userAvatarFallback" aria-hidden="true">—</span>
+            <img class="avatar avatar-image" id="userAvatarImage" alt="" referrerpolicy="no-referrer" hidden>
+            <p>
+              <strong id="userName">Pengguna</strong>
+              <span id="userEmail"></span>
+              <small>Pengesahan akses belum selesai</small>
+            </p>
+            <button class="logout-button" id="logoutButton" type="button">Log keluar</button>
           </div>
         </div>
       </header>
@@ -223,6 +251,7 @@
   </div>
 
   <button class="help-button" type="button" aria-label="Bantuan"><b>?</b><span>BANTUAN</span></button>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" crossorigin="anonymous"></script>
   <script src="./assets/js/app.js"></script>
 </body>
 </html>
