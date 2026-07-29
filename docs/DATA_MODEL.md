@@ -20,7 +20,7 @@ Enam tab pengeluaran kini telah diwujudkan dalam spreadsheet yang sama:
 - `AUDIT_LOG`
 - `SETTINGS`
 
-Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. Pada masa ini, hanya `MASTER_ITEM` didedahkan melalui Cloudflare Worker pengeluaran menggunakan endpoint baca sahaja `GET /api/items`. Lima tab pengeluaran lain belum didedahkan melalui API.
+Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. Pada masa ini, hanya `MASTER_ITEM` didedahkan melalui Cloudflare Worker pengeluaran menggunakan endpoint baca sahaja `GET /api/items`, dan frontend GitHub Pages telah menggunakan endpoint tersebut sejak 29 Julai 2026. Lima tab pengeluaran lain belum didedahkan melalui API.
 
 GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth dirancang untuk mengesahkan identiti pengguna, tetapi belum diintegrasikan dalam aliran frontend/backend yang aktif. Penguatkuasaan peranan, operasi tulis dan pengiraan stok berasaskan transaksi juga masih belum dilaksanakan.
 
@@ -341,13 +341,13 @@ Selesai dan disahkan:
 2. Enam tab pengeluaran telah diwujudkan.
 3. `MASTER_ITEM` telah dimigrasikan dan direkonsiliasi kepada 130 item.
 4. Cloudflare Worker pengeluaran membaca semua 130 item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
+5. Frontend pengeluaran memaparkan data langsung `MASTER_ITEM`; nilai stok diketahui masih berdasarkan `STOK_AWAL` sehingga lejar transaksi diaktifkan.
 
 Kerja seterusnya:
 
-1. Sambungkan frontend kepada endpoint baca `GET /api/items`.
-2. Integrasikan Supabase Google Auth dan pengesahan token pada Worker.
-3. Kuatkuasakan akses berasaskan peranan.
-4. Laksanakan endpoint transaksi serta pengiraan stok semasa.
-5. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
-6. Hadkan semua operasi tulis kepada Cloudflare Worker.
-7. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.
+1. Integrasikan Supabase Google Auth dan pengesahan token pada Worker.
+2. Kuatkuasakan akses berasaskan peranan.
+3. Laksanakan endpoint transaksi serta pengiraan stok semasa.
+4. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
+5. Hadkan semua operasi tulis kepada Cloudflare Worker.
+6. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.

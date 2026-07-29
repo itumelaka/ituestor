@@ -40,6 +40,8 @@ Status: `200 OK`
 
 Mengesahkan akaun perkhidmatan Google, membaca julat `MASTER_ITEM!A:Z`, dan menukar setiap baris kepada objek inventori berstruktur.
 
+Endpoint ini digunakan oleh frontend pengeluaran di <https://itumelaka.github.io/ituestor/>. CORS untuk origin `https://itumelaka.github.io` telah disahkan pada 29 Julai 2026.
+
 ### Permintaan
 
 ```http
@@ -140,6 +142,8 @@ Medan `message` semasa boleh mengandungi butiran ralat dalaman yang dijana oleh 
 - Tiada endpoint `POST`, `PUT`, `PATCH` atau `DELETE`.
 - Tiada transaksi, permohonan, kelulusan atau perubahan stok boleh dilakukan melalui API.
 - Akaun perkhidmatan Google menggunakan skop baca sahaja dan akses Viewer.
-- Frontend GitHub Pages belum memanggil API ini.
+- Frontend GitHub Pages memanggil endpoint ini untuk statistik, carta kategori, status stok dan carian item.
+- Nilai stok yang dipaparkan masih dikira daripada `stokAwal × kosSeunit`; lejar transaksi belum aktif.
+- Modul permohonan dan transaksi dipaparkan sebagai `Belum aktif`.
 
 Jangan hantar rahsia akaun perkhidmatan, kunci peribadi atau kandungan `.dev.vars` melalui mana-mana permintaan frontend.

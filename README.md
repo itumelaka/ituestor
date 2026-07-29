@@ -8,14 +8,14 @@ ITU eSTOR ialah sistem pengurusan stok dan bekalan untuk **Institut Teknologi Un
 - Backend API: <https://ituestor-api.itumelaka.workers.dev>
 - Repositori: <https://github.com/itumelaka/ituestor>
 
-> **Status semasa:** API pengeluaran boleh membaca 130 item berstruktur daripada `MASTER_ITEM`, tetapi frontend masih belum disambungkan kepada API tersebut. Data dashboard yang dipaparkan pada frontend belum merupakan data langsung.
+> **Status semasa:** Frontend pengeluaran telah disambungkan kepada `GET /api/items` dan memaparkan data langsung daripada `MASTER_ITEM`. Integrasi ini disahkan pada 29 Julai 2026.
 
 ## Seni bina
 
 ```text
 GitHub Pages frontend
         │
-        │  Belum disambungkan
+        │  GET /api/items
         ▼
 Cloudflare Worker TypeScript
         │
@@ -24,7 +24,7 @@ Cloudflare Worker TypeScript
 Google Sheets Native / MASTER_ITEM
 ```
 
-- **Frontend:** GitHub Pages
+- **Frontend:** GitHub Pages, disambungkan kepada `GET /api/items` dengan CORS pengeluaran yang disahkan
 - **Backend:** Cloudflare Worker `ituestor-api`
 - **Storan:** Google Sheets Native dalam Google Drive
 - **Akses Google:** Akaun perkhidmatan Google dengan skop baca sahaja
@@ -40,6 +40,9 @@ Setakat **29 Julai 2026**:
 - jumlah nilai awal ialah RM2,334.40;
 - empat tab legasi kekal tidak berubah;
 - Worker pengeluaran menyediakan API baca sahaja untuk `MASTER_ITEM`.
+- frontend memaparkan 130 item langsung daripada API tanpa data dummy;
+- dashboard mengira nilai stok diketahui sebanyak RM2,334.40 daripada stok awal, dengan 0 stok rendah dan 80 stok habis;
+- carian item serta keadaan memuat, ralat, percubaan semula dan kosong telah diaktifkan.
 
 Butiran lanjut: [Status Projek](docs/PROJECT_STATUS.md).
 
@@ -95,11 +98,11 @@ npm run deploy
 
 ## Batasan semasa
 
-- Frontend belum menggunakan data daripada `/api/items`.
 - `/api/items` belum dilindungi dengan pengesahan atau kawalan peranan.
 - Supabase Google Auth belum diintegrasikan.
 - API transaksi, permohonan, kelulusan dan operasi tulis belum tersedia.
-- Pengiraan stok berasaskan transaksi belum aktif.
+- Nilai stok pada dashboard masih berdasarkan `stokAwal`; pengiraan berasaskan lejar transaksi belum aktif.
+- Kad permohonan dan transaksi dipaparkan sebagai `Belum aktif` sehingga endpoint berkaitan tersedia.
 - Ujian Worker masih perlu dikemas kini supaya mencerminkan endpoint semasa.
 
 ## Dokumentasi

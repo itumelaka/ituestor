@@ -4,9 +4,9 @@
 
 ## Ringkasan
 
-ITU eSTOR telah mencapai fasa awal pengeluaran baca sahaja. Frontend statik dan Cloudflare Worker telah diterbitkan, enam tab pengeluaran Google Sheets telah diwujudkan, dan migrasi 130 item ke `MASTER_ITEM` telah selesai. Worker berjaya mengesahkan akaun perkhidmatan Google dan mengembalikan semua 130 item sebagai objek berstruktur.
+ITU eSTOR telah mencapai fasa pengeluaran baca sahaja bersepadu. Frontend GitHub Pages mengambil data langsung daripada Cloudflare Worker, enam tab pengeluaran Google Sheets telah diwujudkan, dan migrasi 130 item ke `MASTER_ITEM` telah selesai. CORS pengeluaran dan dashboard berasaskan data sebenar telah disahkan.
 
-Frontend **belum disambungkan** kepada API pengeluaran. Supabase Google Auth, kawalan akses berasaskan peranan dan semua operasi tulis masih belum dilaksanakan.
+Supabase Google Auth, kawalan akses berasaskan peranan, lejar transaksi aktif dan semua operasi tulis masih belum dilaksanakan.
 
 ## Infrastruktur pengeluaran
 
@@ -28,8 +28,24 @@ Frontend **belum disambungkan** kepada API pengeluaran. Supabase Google Auth, ka
 - [x] Repositori GitHub diwujudkan.
 - [x] Dashboard statik 3D Clay diterbitkan melalui GitHub Pages.
 - [x] Dokumentasi model data dan pemetaan migrasi diwujudkan.
-- [ ] Frontend disambungkan kepada Worker API.
-- [ ] Keadaan memuat, kosong dan ralat API dilaksanakan pada frontend.
+- [x] Frontend disambungkan kepada Worker API pengeluaran.
+- [x] CORS pengeluaran disahkan untuk origin GitHub Pages.
+- [x] Statistik, carta kategori dan senarai status stok menggunakan data sebenar.
+- [x] Keadaan memuat, kosong, ralat dan percubaan semula dilaksanakan pada frontend.
+- [x] Carian item menggunakan `itemId`, `namaItem`, `kategori` dan `unit`.
+
+### Milestone integrasi frontend — 29 Julai 2026
+
+Commit pengeluaran `d567a6a` (`feat: connect dashboard to production inventory API`) mengaktifkan pengambilan data daripada `https://ituestor-api.itumelaka.workers.dev/api/items`. Data dummy telah dibuang dan dashboard langsung disahkan dengan jumlah berikut:
+
+| Metrik | Nilai |
+|---|---:|
+| Jumlah item | 130 |
+| Nilai stok awal diketahui | RM2,334.40 |
+| Stok rendah | 0 |
+| Stok habis | 80 |
+
+Pecahan kategori kekal 63 `ALAT TULIS`, 16 `BAHAN KIMIA`, 40 `HOUSE HOLD` dan 11 `LAIN-LAIN`. Kad permohonan dan transaksi memaparkan `Belum aktif` kerana endpoint serta lejar berkaitan belum tersedia.
 
 ### Google Sheets
 
@@ -109,23 +125,21 @@ Nilai rahsia tidak direkodkan dalam dokumentasi atau repositori.
 | `c843682` | `feat: add Cloudflare Worker Google Sheets API` |
 | `7196a4d` | `feat: return structured inventory items` |
 | `6a7be35` | `chore: harden production health response` |
+| `d567a6a` | `feat: connect dashboard to production inventory API` |
 
 ## Batasan semasa
 
-1. Dashboard frontend masih memaparkan data prototaip, bukan data langsung.
-2. `/api/items` boleh dicapai tanpa pengesahan pengguna.
+1. `/api/items` boleh dicapai tanpa pengesahan pengguna.
+2. Nilai stok dashboard masih dikira daripada `stokAwal`, bukan lejar transaksi.
 3. Supabase Google Auth hanya dirancang dan belum berada dalam aliran aktif.
 4. `TRANSACTIONS`, `USERS`, `REQUESTS`, `AUDIT_LOG` dan `SETTINGS` telah wujud sebagai tab, tetapi belum didedahkan melalui Worker pengeluaran.
 5. API tidak menyokong ciptaan, perubahan, kelulusan atau pemadaman rekod.
-6. Stok semasa belum dikira daripada lejar transaksi.
+6. Endpoint transaksi dan permohonan belum aktif; kad berkaitan dipaparkan sebagai `Belum aktif`.
 7. Ujian automatik Worker masih mengandungi jangkaan contoh “Hello World” dan belum sepadan dengan pelaksanaan pengeluaran.
 8. Kod menggunakan `GOOGLE_PRIVATE_KEY_ID`, tetapi nama ini belum disenaraikan dalam `secrets.required` di `wrangler.jsonc` atau jenis Worker yang dijana. Konfigurasi dan type generation perlu diselaraskan sebelum pembangunan setempat seterusnya.
 
 ## Kerja seterusnya yang dirancang
 
-- [ ] Sambungkan frontend kepada `GET /api/items`.
-- [ ] Gantikan statistik dan senarai prototaip dengan data sebenar.
-- [ ] Tambah keadaan memuat, ralat, tiada data dan percubaan semula.
 - [ ] Integrasikan Supabase Google Auth pada frontend.
 - [ ] Sahkan token pengguna di Cloudflare Worker.
 - [ ] Aktifkan kawalan akses berasaskan peranan.
