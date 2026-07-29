@@ -142,12 +142,6 @@ service: "ITU eSTOR API",
 status: "running",
 environment: env.APP_ENV,
 timestamp: new Date().toISOString(),
-credentials: {
-emailLoaded: typeof env.GOOGLE_SERVICE_ACCOUNT_EMAIL === "string",
-emailLength: env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.length ?? 0,
-privateKeyLoaded: typeof env.GOOGLE_PRIVATE_KEY === "string",
-privateKeyLength: env.GOOGLE_PRIVATE_KEY?.length ?? 0,
-},
 });
 }
 
@@ -217,8 +211,3 @@ message: "Endpoint tidak ditemui.",
 );
 },
 } satisfies ExportedHandler<Env>;
-
-
-
-
-

@@ -20,9 +20,8 @@
 ]
 },
 "vars": {
-"APP_ENV": "development",
+"APP_ENV": "production",
 "SPREADSHEET_ID": "1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4",
 "MASTER_ITEM_SHEET": "MASTER_ITEM"
 }
 }
-
