@@ -6,7 +6,7 @@
 
 ITU eSTOR telah mencapai fasa pengeluaran baca sahaja bersepadu. Frontend GitHub Pages mengambil data langsung daripada Cloudflare Worker, enam tab pengeluaran Google Sheets telah diwujudkan, dan migrasi 130 item ke `MASTER_ITEM` telah selesai. CORS pengeluaran dan dashboard berasaskan data sebenar telah disahkan.
 
-Supabase Google Auth, kawalan akses berasaskan peranan, lejar transaksi aktif dan semua operasi tulis masih belum dilaksanakan.
+Supabase Google Auth telah aktif pada frontend dan pengesahan identiti Google berjaya. Kebenaran aplikasi melalui tab `USERS`, pengesahan token oleh Worker, lejar transaksi aktif dan semua operasi tulis masih belum dilaksanakan.
 
 ## Infrastruktur pengeluaran
 
@@ -16,6 +16,8 @@ Supabase Google Auth, kawalan akses berasaskan peranan, lejar transaksi aktif da
 | Frontend | <https://itumelaka.github.io/ituestor/> |
 | Worker | `ituestor-api` |
 | API | <https://ituestor-api.itumelaka.workers.dev> |
+| Supabase | `ITU eSTOR` / `tzsykhjfhmctasjscwch` |
+| Supabase URL | <https://tzsykhjfhmctasjscwch.supabase.co> |
 | Persekitaran Worker | `production` |
 | Spreadsheet | `STOK BARANG (10 JULAI 2026)` |
 | Spreadsheet ID | `1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4` |
@@ -33,6 +35,23 @@ Supabase Google Auth, kawalan akses berasaskan peranan, lejar transaksi aktif da
 - [x] Statistik, carta kategori dan senarai status stok menggunakan data sebenar.
 - [x] Keadaan memuat, kosong, ralat dan percubaan semula dilaksanakan pada frontend.
 - [x] Carian item menggunakan `itemId`, `namaItem`, `kategori` dan `unit`.
+- [x] Google OAuth melalui Supabase Auth diaktifkan pada frontend.
+- [x] Skrin log masuk mengunci Dashboard dan Daftar Item tanpa sesi.
+- [x] Pemulihan sesi, pemantauan perubahan auth, profil Google dan log keluar disahkan.
+
+### Milestone Supabase Google Auth — 29 Julai 2026
+
+Commit pengeluaran `e1d3df5` (`feat: add Supabase Google authentication`) mengaktifkan pengesahan identiti Google menggunakan publishable key pelayar. Nama, e-mel dan imej profil dipaparkan selepas log masuk; UI memaparkan `Pengesahan akses belum selesai` dan tidak memberikan `SUPER_ADMIN` secara automatik.
+
+Konfigurasi OAuth yang disahkan:
+
+- callback Supabase: `https://tzsykhjfhmctasjscwch.supabase.co/auth/v1/callback`;
+- Site URL: `https://itumelaka.github.io/ituestor/`;
+- redirect dibenarkan untuk frontend pengeluaran, `http://localhost:5173/` dan `http://127.0.0.1:5173/`;
+- origin JavaScript dibenarkan: `https://itumelaka.github.io`, `http://localhost:5173` dan `http://127.0.0.1:5173`;
+- status penerbitan Google OAuth ialah `Testing`; pengguna ujian semasa ialah `itumelaka@gmail.com`.
+
+Pengesahan Google membuktikan identiti sahaja. Ia belum membuktikan bahawa pengguna dibenarkan menggunakan aplikasi atau mempunyai sesuatu peranan.
 
 ### Milestone integrasi frontend — 29 Julai 2026
 
@@ -111,8 +130,14 @@ Lihat [API.md](API.md) untuk kontrak respons.
 - [x] Akaun perkhidmatan menggunakan skop `spreadsheets.readonly`.
 - [x] Akaun perkhidmatan hanya diberi akses Viewer kepada Google Sheet.
 - [x] Respons `/health` tidak mendedahkan metadata sensitif.
-- [ ] Pengesahan Supabase Google Auth diaktifkan.
+- [x] Pengesahan identiti Supabase Google Auth diaktifkan pada frontend.
+- [x] Pengguna tanpa sesi disekat daripada kandungan frontend.
+- [x] UI tidak mendakwa pengguna ialah `SUPER_ADMIN` sebelum pengesahan backend.
+- [ ] Frontend menghantar bearer token Supabase kepada Worker.
 - [ ] Token frontend disahkan oleh Worker.
+- [ ] Worker membaca e-mel daripada token yang telah disahkan.
+- [ ] Worker menyemak e-mel, `STATUS = AKTIF` dan peranan dalam `USERS`.
+- [ ] Pengguna tidak tersenarai, tidak aktif atau tidak dibenarkan ditolak.
 - [ ] Peranan `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR` dan `VIEWER` dikuatkuasakan.
 - [ ] `/api/items` dihadkan kepada pengguna yang sah.
 
@@ -126,12 +151,13 @@ Nilai rahsia tidak direkodkan dalam dokumentasi atau repositori.
 | `7196a4d` | `feat: return structured inventory items` |
 | `6a7be35` | `chore: harden production health response` |
 | `d567a6a` | `feat: connect dashboard to production inventory API` |
+| `e1d3df5` | `feat: add Supabase Google authentication` |
 
 ## Batasan semasa
 
 1. `/api/items` boleh dicapai tanpa pengesahan pengguna.
 2. Nilai stok dashboard masih dikira daripada `stokAwal`, bukan lejar transaksi.
-3. Supabase Google Auth hanya dirancang dan belum berada dalam aliran aktif.
+3. Supabase Google Auth hanya melindungi UI frontend; ia belum melindungi Worker API.
 4. `TRANSACTIONS`, `USERS`, `REQUESTS`, `AUDIT_LOG` dan `SETTINGS` telah wujud sebagai tab, tetapi belum didedahkan melalui Worker pengeluaran.
 5. API tidak menyokong ciptaan, perubahan, kelulusan atau pemadaman rekod.
 6. Endpoint transaksi dan permohonan belum aktif; kad berkaitan dipaparkan sebagai `Belum aktif`.
@@ -140,9 +166,11 @@ Nilai rahsia tidak direkodkan dalam dokumentasi atau repositori.
 
 ## Kerja seterusnya yang dirancang
 
-- [ ] Integrasikan Supabase Google Auth pada frontend.
+- [ ] Hantar bearer token Supabase daripada frontend kepada Worker.
 - [ ] Sahkan token pengguna di Cloudflare Worker.
-- [ ] Aktifkan kawalan akses berasaskan peranan.
+- [ ] Baca e-mel yang disahkan dan semak pengguna aktif serta peranan melalui `USERS`.
+- [ ] Tolak pengguna yang tidak dibenarkan atau tidak aktif.
+- [ ] Aktifkan kawalan akses berasaskan peranan pada setiap endpoint.
 - [ ] Lindungi `/api/items`.
 - [ ] Laksanakan endpoint transaksi dan pengiraan stok semasa.
 - [ ] Laksanakan aliran permohonan, kelulusan dan penyerahan.
@@ -150,3 +178,5 @@ Nilai rahsia tidak direkodkan dalam dokumentasi atau repositori.
 - [ ] Kemas kini ujian automatik untuk endpoint sebenar.
 - [ ] Selaraskan `GOOGLE_PRIVATE_KEY_ID` dalam deklarasi rahsia dan jana semula jenis Worker.
 - [ ] Jalankan semakan keselamatan sebelum API tulis diaktifkan.
+
+Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain tidak boleh dilaksanakan sebelum rangkaian kebenaran backend di atas lengkap dan diuji.

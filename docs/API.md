@@ -2,7 +2,7 @@
 
 ## Status
 
-API pengeluaran ITU eSTOR kini **baca sahaja**. Hanya dua endpoint `GET` aktif. Pengesahan pengguna dan kawalan peranan belum dikuatkuasakan.
+API pengeluaran ITU eSTOR kini **baca sahaja**. Hanya dua endpoint `GET` aktif. Frontend telah menggunakan Supabase Google Auth, tetapi Worker belum mengesahkan token atau menguatkuasakan pengguna dan peranan.
 
 **Base URL**
 
@@ -136,7 +136,9 @@ Medan `message` semasa boleh mengandungi butiran ralat dalaman yang dijana oleh 
 ## Keselamatan dan batasan
 
 - Endpoint `/api/items` belum memerlukan token atau sesi pengguna.
-- Supabase Google Auth belum diintegrasikan.
+- Supabase Google Auth mengesahkan identiti pada frontend sahaja.
+- Frontend belum menghantar bearer token Supabase kepada Worker.
+- Worker belum mengesahkan token, membaca e-mel pengguna atau menyemaknya terhadap `USERS`.
 - Kawalan akses berasaskan peranan belum aktif.
 - API hanya membaca `MASTER_ITEM`; lima tab pengeluaran lain belum didedahkan.
 - Tiada endpoint `POST`, `PUT`, `PATCH` atau `DELETE`.
@@ -146,4 +148,14 @@ Medan `message` semasa boleh mengandungi butiran ralat dalaman yang dijana oleh 
 - Nilai stok yang dipaparkan masih dikira daripada `stokAwal × kosSeunit`; lejar transaksi belum aktif.
 - Modul permohonan dan transaksi dipaparkan sebagai `Belum aktif`.
 
-Jangan hantar rahsia akaun perkhidmatan, kunci peribadi atau kandungan `.dev.vars` melalui mana-mana permintaan frontend.
+## Milestone keselamatan API seterusnya
+
+Sebelum mana-mana endpoint tulis diwujudkan:
+
+1. frontend menghantar token akses Supabase sebagai bearer token;
+2. Worker mengesahkan token dengan Supabase;
+3. Worker mengambil e-mel daripada identiti yang telah disahkan;
+4. Worker menyemak e-mel, status aktif dan peranan dalam tab `USERS`;
+5. permintaan pengguna tidak tersenarai, tidak aktif atau tidak dibenarkan ditolak.
+
+Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain tidak boleh diaktifkan sebelum aliran ini lengkap serta diuji. Jangan hantar rahsia akaun perkhidmatan, kunci peribadi atau kandungan `.dev.vars` melalui mana-mana permintaan frontend.

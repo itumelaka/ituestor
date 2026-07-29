@@ -22,7 +22,7 @@ Enam tab pengeluaran kini telah diwujudkan dalam spreadsheet yang sama:
 
 Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. Pada masa ini, hanya `MASTER_ITEM` didedahkan melalui Cloudflare Worker pengeluaran menggunakan endpoint baca sahaja `GET /api/items`, dan frontend GitHub Pages telah menggunakan endpoint tersebut sejak 29 Julai 2026. Lima tab pengeluaran lain belum didedahkan melalui API.
 
-GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth dirancang untuk mengesahkan identiti pengguna, tetapi belum diintegrasikan dalam aliran frontend/backend yang aktif. Penguatkuasaan peranan, operasi tulis dan pengiraan stok berasaskan transaksi juga masih belum dilaksanakan.
+GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth telah mengesahkan identiti pengguna pada frontend sejak 29 Julai 2026, tetapi Worker belum mengesahkan token atau memadankan e-mel dengan status dan peranan dalam `USERS`. Penguatkuasaan peranan, operasi tulis dan pengiraan stok berasaskan transaksi masih belum dilaksanakan.
 
 Semua cap masa menggunakan zon `Asia/Kuala_Lumpur`, mata wang ialah Ringgit Malaysia (RM), dan alamat e-mel disimpan dalam huruf kecil.
 
@@ -180,6 +180,7 @@ STATUS: AKTIF
 ### Validasi dan hubungan
 
 - Pengesahan Google melalui Supabase tidak secara automatik memberi akses aplikasi.
+- Nama, e-mel dan imej profil daripada Google ialah identiti, bukan bukti peranan aplikasi.
 - E-mel mesti wujud dalam `USERS` dan berstatus `AKTIF`.
 - Hanya `SUPER_ADMIN` boleh mengubah peranan dan tetapan kritikal.
 - E-mel pengguna dirujuk oleh transaksi, permohonan, audit dan tetapan.
@@ -342,12 +343,17 @@ Selesai dan disahkan:
 3. `MASTER_ITEM` telah dimigrasikan dan direkonsiliasi kepada 130 item.
 4. Cloudflare Worker pengeluaran membaca semua 130 item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
 5. Frontend pengeluaran memaparkan data langsung `MASTER_ITEM`; nilai stok diketahui masih berdasarkan `STOK_AWAL` sehingga lejar transaksi diaktifkan.
+6. Supabase Google Auth mengunci frontend tanpa sesi dan memulihkan sesi pengguna, tetapi UI kekal pada `Pengesahan akses belum selesai`.
 
 Kerja seterusnya:
 
-1. Integrasikan Supabase Google Auth dan pengesahan token pada Worker.
-2. Kuatkuasakan akses berasaskan peranan.
-3. Laksanakan endpoint transaksi serta pengiraan stok semasa.
-4. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
-5. Hadkan semua operasi tulis kepada Cloudflare Worker.
-6. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.
+1. Hantar bearer token Supabase daripada frontend dan sahkannya pada Worker.
+2. Baca e-mel yang disahkan, kemudian semak pengguna aktif serta peranan dalam `USERS`.
+3. Tolak pengguna tidak tersenarai, tidak aktif atau tidak dibenarkan.
+4. Kuatkuasakan akses berasaskan peranan.
+5. Laksanakan endpoint transaksi serta pengiraan stok semasa.
+6. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
+7. Hadkan semua operasi tulis kepada Cloudflare Worker.
+8. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.
+
+Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain mesti menunggu sehingga langkah kebenaran backend 1–4 lengkap dan diuji.

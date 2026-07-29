@@ -8,14 +8,15 @@ ITU eSTOR ialah sistem pengurusan stok dan bekalan untuk **Institut Teknologi Un
 - Backend API: <https://ituestor-api.itumelaka.workers.dev>
 - Repositori: <https://github.com/itumelaka/ituestor>
 
-> **Status semasa:** Frontend pengeluaran telah disambungkan kepada `GET /api/items` dan memaparkan data langsung daripada `MASTER_ITEM`. Integrasi ini disahkan pada 29 Julai 2026.
+> **Status semasa:** Frontend pengeluaran memaparkan data langsung daripada `MASTER_ITEM` dan menggunakan Supabase Google Auth. Pengesahan identiti telah aktif, tetapi kebenaran aplikasi melalui `USERS` dan peranan masih belum dikuatkuasakan oleh Worker.
 
 ## Seni bina
 
 ```text
 GitHub Pages frontend
+        ├── Supabase Google Auth (identiti)
         │
-        │  GET /api/items
+        │  GET /api/items (masih awam)
         ▼
 Cloudflare Worker TypeScript
         │
@@ -28,7 +29,8 @@ Google Sheets Native / MASTER_ITEM
 - **Backend:** Cloudflare Worker `ituestor-api`
 - **Storan:** Google Sheets Native dalam Google Drive
 - **Akses Google:** Akaun perkhidmatan Google dengan skop baca sahaja
-- **Pengesahan pengguna:** Supabase Google Auth dirancang, tetapi belum diintegrasikan dalam aliran frontend/backend yang aktif
+- **Pengesahan identiti:** Supabase Google Auth aktif pada frontend
+- **Kebenaran aplikasi:** semakan e-mel aktif dan peranan melalui `USERS` masih belum dilaksanakan oleh Worker
 
 ## Status pengeluaran disahkan
 
@@ -43,6 +45,9 @@ Setakat **29 Julai 2026**:
 - frontend memaparkan 130 item langsung daripada API tanpa data dummy;
 - dashboard mengira nilai stok diketahui sebanyak RM2,334.40 daripada stok awal, dengan 0 stok rendah dan 80 stok habis;
 - carian item serta keadaan memuat, ralat, percubaan semula dan kosong telah diaktifkan.
+- Google OAuth melalui projek Supabase `ITU eSTOR` (`tzsykhjfhmctasjscwch`) telah disahkan;
+- pengguna tanpa sesi hanya melihat skrin log masuk, sesi dipulihkan selepas muat semula, dan log keluar mengunci semula aplikasi;
+- frontend menggunakan publishable key yang selamat untuk pelayar; tiada nilai rahsia direkodkan dalam dokumentasi.
 
 Butiran lanjut: [Status Projek](docs/PROJECT_STATUS.md).
 
@@ -87,6 +92,8 @@ npm run deploy
 
 ## Keselamatan
 
+- Supabase mengesahkan identiti Google; ini belum memberikan peranan aplikasi.
+- UI memaparkan `Pengesahan akses belum selesai` sehingga Worker mengesahkan pengguna melalui `USERS`.
 - Rahsia setempat disimpan dalam `worker/.dev.vars`, yang diabaikan oleh Git.
 - Rahsia pengeluaran disimpan sebagai Cloudflare Worker secrets:
   - `GOOGLE_SERVICE_ACCOUNT_EMAIL`
@@ -99,8 +106,10 @@ npm run deploy
 ## Batasan semasa
 
 - `/api/items` belum dilindungi dengan pengesahan atau kawalan peranan.
-- Supabase Google Auth belum diintegrasikan.
+- Frontend belum menghantar bearer token Supabase kepada Worker.
+- Worker belum mengesahkan token, membaca e-mel yang disahkan atau menyemak status/peranan dalam `USERS`.
 - API transaksi, permohonan, kelulusan dan operasi tulis belum tersedia.
+- Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain tidak boleh diaktifkan sebelum kebenaran backend lengkap.
 - Nilai stok pada dashboard masih berdasarkan `stokAwal`; pengiraan berasaskan lejar transaksi belum aktif.
 - Kad permohonan dan transaksi dipaparkan sebagai `Belum aktif` sehingga endpoint berkaitan tersedia.
 - Ujian Worker masih perlu dikemas kini supaya mencerminkan endpoint semasa.
@@ -112,7 +121,9 @@ npm run deploy
 - [Model data](docs/DATA_MODEL.md)
 - [Pemetaan spreadsheet dan migrasi](docs/SPREADSHEET_MAPPING.md)
 
-## Pentadbir utama
+## Rekod pentadbir awal
 
 - Nama paparan: **ITU Melaka**
 - E-mel: **itumelaka@gmail.com**
+
+Rekod ini tidak menjadikan sesi Google sebagai `SUPER_ADMIN` secara automatik; status aktif dan peranan mesti disahkan oleh Worker terhadap tab `USERS`.
