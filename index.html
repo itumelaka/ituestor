@@ -65,7 +65,7 @@
         </div>
       </header>
 
-      <main id="dashboard">
+      <main id="dashboard" class="page-view">
         <section class="hero" aria-label="Identiti ITU eSTOR">
           <img src="./assets/images/ituestor-header.png" alt="ITU eSTOR dengan petugas stor lelaki dan wanita, kotak inventori serta identiti Institut Teknologi Unggas">
         </section>
@@ -131,7 +131,95 @@
           </div>
         </section>
       </main>
+
+      <main id="daftar-item" class="page-view item-register" hidden>
+        <section class="register-heading">
+          <div>
+            <p class="eyebrow">INVENTORI PENGELUARAN</p>
+            <h1>Daftar Item</h1>
+            <p>Senarai item sebenar daripada MASTER_ITEM. Klik mana-mana item untuk melihat butiran lengkap.</p>
+          </div>
+          <span class="register-icon" aria-hidden="true">📋</span>
+        </section>
+
+        <div class="data-state is-loading" id="registerDataState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="registerStateMessage">Memuatkan daftar item…</span>
+          <button id="registerRetry" type="button" hidden>Cuba lagi</button>
+        </div>
+
+        <section class="register-controls" aria-label="Carian dan penapis daftar item">
+          <label class="control-search">
+            <span>Cari item</span>
+            <input id="itemSearch" type="search" placeholder="ID, nama, nama asal, kategori atau unit" autocomplete="off">
+          </label>
+          <label>
+            <span>Kategori</span>
+            <select id="categoryFilter"><option value="">Semua kategori</option></select>
+          </label>
+          <label>
+            <span>Status stok</span>
+            <select id="stockFilter">
+              <option value="">Semua</option>
+              <option value="ADA STOK">Ada Stok</option>
+              <option value="RENDAH">Rendah</option>
+              <option value="HABIS">Habis</option>
+            </select>
+          </label>
+          <label id="apiStatusFilterLabel">
+            <span>Status item</span>
+            <select id="apiStatusFilter"><option value="">Semua status</option></select>
+          </label>
+          <label>
+            <span>Susunan</span>
+            <select id="itemSort">
+              <option value="id">Item ID</option>
+              <option value="name">Nama Item</option>
+              <option value="category">Kategori</option>
+              <option value="stock-asc">Stok terendah</option>
+              <option value="stock-desc">Stok tertinggi</option>
+              <option value="value-asc">Nilai terendah</option>
+              <option value="value-desc">Nilai tertinggi</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="register-results" aria-labelledby="registerSummary">
+          <div class="result-bar">
+            <p id="registerSummary">Menunggu data item…</p>
+            <div id="activeFilters" class="active-filters" aria-label="Penapis aktif"></div>
+          </div>
+          <div class="register-table-wrap">
+            <table class="register-table">
+              <thead>
+                <tr>
+                  <th>ITEM ID</th><th>NAMA ITEM</th><th>KATEGORI</th><th>UNIT</th>
+                  <th>KOS SEUNIT</th><th>STOK AWAL</th><th>STOK MIN.</th>
+                  <th>NILAI ITEM</th><th>STATUS ITEM</th><th>STATUS STOK</th>
+                </tr>
+              </thead>
+              <tbody id="itemRows"><tr><td colspan="10" class="empty-state">Menunggu data item…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="item-cards" id="itemCards"></div>
+          <nav class="pagination" aria-label="Halaman daftar item">
+            <button id="previousPage" type="button">← Sebelumnya</button>
+            <span id="pageSummary">Halaman —</span>
+            <button id="nextPage" type="button">Seterusnya →</button>
+          </nav>
+        </section>
+      </main>
     </div>
+  </div>
+
+  <div class="modal-backdrop" id="itemModal" hidden>
+    <section class="item-modal" role="dialog" aria-modal="true" aria-labelledby="itemModalTitle">
+      <div class="modal-heading">
+        <div><p class="eyebrow">BUTIRAN ITEM</p><h2 id="itemModalTitle">Item</h2></div>
+        <button id="closeItemModal" class="modal-close" type="button" aria-label="Tutup butiran item">×</button>
+      </div>
+      <dl id="itemDetails" class="item-details"></dl>
+    </section>
   </div>
 
   <button class="help-button" type="button" aria-label="Bantuan"><b>?</b><span>BANTUAN</span></button>
