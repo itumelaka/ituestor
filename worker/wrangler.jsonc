@@ -1,0 +1,28 @@
+﻿/**
+ * ITU eSTOR Cloudflare Worker configuration
+ */
+{
+"$schema": "node_modules/wrangler/config-schema.json",
+"name": "ituestor-api",
+"main": "src/index.ts",
+"compatibility_date": "2026-07-29",
+"compatibility_flags": [
+"nodejs_compat"
+],
+"observability": {
+"enabled": true
+},
+"upload_source_maps": true,
+"secrets": {
+"required": [
+"GOOGLE_SERVICE_ACCOUNT_EMAIL",
+"GOOGLE_PRIVATE_KEY"
+]
+},
+"vars": {
+"APP_ENV": "development",
+"SPREADSHEET_ID": "1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4",
+"MASTER_ITEM_SHEET": "MASTER_ITEM"
+}
+}
+
