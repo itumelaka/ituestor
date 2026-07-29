@@ -155,11 +155,41 @@ if (request.method === "GET" && url.pathname === "/api/items") {
 try {
 const sheetData = await getMasterItems(env);
 
+const rows = sheetData.values ?? [];
+const headers = rows[0] ?? [];
+
+const items = rows.slice(1).map((row) => {
+const record = Object.fromEntries(
+headers.map((header, index) => [header, row[index] ?? ""]),
+);
+
+return {
+itemId: record.ITEM_ID,
+kategori: record.KATEGORI,
+namaItem: record.NAMA_ITEM,
+namaItemAsal: record.NAMA_ITEM_ASAL,
+unit: record.UNIT,
+kosSeunit: Number(
+String(record.KOS_SEUNIT)
+.replace("RM", "")
+.replace(/,/g, "")
+.trim(),
+),
+stokAwal: Number(record.STOK_AWAL || 0),
+stokMinimum: Number(record.STOK_MINIMUM || 0),
+status: record.STATUS,
+sumberTab: record.SUMBER_TAB,
+sumberBaris: Number(record.SUMBER_BARIS || 0),
+createdAt: record.CREATED_AT,
+updatedAt: record.UPDATED_AT,
+};
+});
+
 return Response.json({
 success: true,
 sheet: env.MASTER_ITEM_SHEET,
-rowCount: sheetData.values?.length ?? 0,
-values: sheetData.values ?? [],
+count: items.length,
+items,
 });
 } catch (error) {
 console.error(error);
@@ -187,6 +217,7 @@ message: "Endpoint tidak ditemui.",
 );
 },
 } satisfies ExportedHandler<Env>;
+
 
 
 
