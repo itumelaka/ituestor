@@ -51,12 +51,12 @@
         <button class="menu-toggle" id="menuToggle" type="button" aria-label="Buka menu" aria-controls="sidebar" aria-expanded="false">☰</button>
         <div class="header-tools">
           <label class="search">
-            <span class="sr-only">Cari item, transaksi atau penerima</span>
-            <input id="dashboardSearch" type="search" placeholder="Cari item, transaksi, penerima..." autocomplete="off">
+            <span class="sr-only">Cari item mengikut ID, nama, kategori atau unit</span>
+            <input id="dashboardSearch" type="search" placeholder="Cari ID, nama, kategori atau unit..." autocomplete="off">
             <span aria-hidden="true">⌕</span>
           </label>
-          <button class="notification" type="button" aria-label="3 pemberitahuan">
-            <span aria-hidden="true">🔔</span><b>3</b>
+          <button class="notification" type="button" aria-label="Pemberitahuan belum diaktifkan">
+            <span aria-hidden="true">🔔</span>
           </button>
           <div class="profile">
             <span class="avatar" aria-hidden="true">IM</span>
@@ -70,28 +70,29 @@
           <img src="./assets/images/ituestor-header.png" alt="ITU eSTOR dengan petugas stor lelaki dan wanita, kotak inventori serta identiti Institut Teknologi Unggas">
         </section>
 
+        <div class="data-state is-loading" id="dataState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="dataStateMessage">Memuatkan data stok sebenar…</span>
+          <button id="retryData" type="button" hidden>Cuba lagi</button>
+        </div>
+
         <section class="stats" aria-label="Statistik stok">
-          <article class="stat blue"><div><span>JUMLAH ITEM</span><strong>352</strong><small>Jenis Item</small></div><i>📋</i></article>
-          <article class="stat green"><div><span>NILAI STOK SEMASA</span><strong>RM 124,560.35</strong><small>Jumlah Nilai (RM)</small></div><i>💵</i></article>
-          <article class="stat yellow"><div><span>STOK RENDAH</span><strong>18</strong><small>Item</small></div><i>⚠️</i></article>
-          <article class="stat red"><div><span>STOK HABIS</span><strong>7</strong><small>Item</small></div><i>❌</i></article>
-          <article class="stat purple"><div><span>PERMOHONAN MENUNGGU</span><strong>6</strong><small>Permohonan</small></div><i>📋</i></article>
-          <article class="stat sky"><div><span>TRANSAKSI HARI INI</span><strong>12</strong><small>Transaksi</small></div><i>↕️</i></article>
+          <article class="stat blue"><div><span>JUMLAH ITEM</span><strong id="totalItems">—</strong><small>Jenis Item</small></div><i>📋</i></article>
+          <article class="stat green"><div><span>NILAI STOK DIKETAHUI</span><strong id="knownStockValue">—</strong><small>Berdasarkan stok awal</small></div><i>💵</i></article>
+          <article class="stat yellow"><div><span>STOK RENDAH</span><strong id="lowStockCount">—</strong><small>Item</small></div><i>⚠️</i></article>
+          <article class="stat red"><div><span>STOK HABIS</span><strong id="outOfStockCount">—</strong><small>Item</small></div><i>❌</i></article>
+          <article class="stat purple"><div><span>PERMOHONAN MENUNGGU</span><strong class="inactive-value">Belum aktif</strong><small>Modul permohonan</small></div><i>📋</i></article>
+          <article class="stat sky"><div><span>TRANSAKSI HARI INI</span><strong class="inactive-value">Belum aktif</strong><small>Lejar transaksi</small></div><i>↕️</i></article>
         </section>
 
         <section class="panel-grid">
           <article class="panel category-panel" id="stok-semasa">
             <h3>RINGKASAN STOK MENGIKUT KATEGORI</h3>
             <div class="category-body">
-              <div class="donut" role="img" aria-label="Carta donut 352 item mengikut kategori">
-                <div><strong>352</strong><small>JUMLAH</small></div>
+              <div class="donut" id="categoryDonut" role="img" aria-label="Carta kategori sedang dimuatkan">
+                <div><strong id="categoryTotal">—</strong><small>JUMLAH</small></div>
               </div>
-              <ul class="legend">
-                <li><i class="dot dot-blue"></i><span>Alat Tulis<strong>142 (40%)</strong></span></li>
-                <li><i class="dot dot-green"></i><span>Bahan Kimia<strong>96 (27%)</strong></span></li>
-                <li><i class="dot dot-yellow"></i><span>House Hold<strong>74 (21%)</strong></span></li>
-                <li><i class="dot dot-red"></i><span>Lain-lain<strong>40 (12%)</strong></span></li>
-              </ul>
+              <ul class="legend" id="categoryLegend"><li class="empty-state">Menunggu data kategori…</li></ul>
             </div>
           </article>
 
@@ -100,13 +101,7 @@
             <div class="table-wrap">
               <table>
                 <thead><tr><th>ITEM</th><th>KATEGORI</th><th>BAKI</th><th>STATUS</th></tr></thead>
-                <tbody>
-                  <tr><td>Pen Marker Hitam</td><td>Alat Tulis</td><td>2</td><td><b class="status-low">RENDAH</b></td></tr>
-                  <tr><td>Kertas A4 80gsm</td><td>Alat Tulis</td><td>4</td><td><b class="status-low">RENDAH</b></td></tr>
-                  <tr><td>Hand Sanitizer 500ml</td><td>Bahan Kimia</td><td>1</td><td><b class="status-low">RENDAH</b></td></tr>
-                  <tr><td>Klorin Serbuk 1kg</td><td>Bahan Kimia</td><td>0</td><td><b class="status-out">HABIS</b></td></tr>
-                  <tr><td>Bateri AA</td><td>Lain-lain</td><td>0</td><td><b class="status-out">HABIS</b></td></tr>
-                </tbody>
+                <tbody id="stockAlertRows"><tr><td colspan="4" class="empty-state">Menunggu data stok…</td></tr></tbody>
               </table>
             </div>
             <a href="#stok-semasa">Lihat semua</a>
@@ -117,13 +112,7 @@
             <div class="table-wrap">
               <table>
                 <thead><tr><th>TARIKH &amp; MASA</th><th>JENIS</th><th>ITEM</th><th>KUANTITI</th><th>OLEH</th></tr></thead>
-                <tbody>
-                  <tr><td>28/07/2026 10:15</td><td><b class="arrow down">↓</b></td><td>Pen Merah</td><td>2</td><td>ITU Melaka</td></tr>
-                  <tr><td>28/07/2026 09:42</td><td><b class="arrow down">↓</b></td><td>Kertas A4 80gsm</td><td>1</td><td>Siti Hajar</td></tr>
-                  <tr><td>28/07/2026 09:10</td><td><b class="arrow up">↑</b></td><td>Hand Sanitizer 500ml</td><td>10</td><td>Admin Stor</td></tr>
-                  <tr><td>28/07/2026 08:55</td><td><b class="arrow down">↓</b></td><td>Pen Biru</td><td>3</td><td>Mohd Razak</td></tr>
-                  <tr><td>28/07/2026 08:30</td><td><b class="arrow up">↑</b></td><td>Klorin Serbuk 1kg</td><td>20</td><td>Admin Stor</td></tr>
-                </tbody>
+                <tbody><tr><td colspan="5" class="empty-state">Transaksi belum diaktifkan</td></tr></tbody>
               </table>
             </div>
             <a href="#transaksi">Lihat semua transaksi</a>
