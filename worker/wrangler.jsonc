@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ITU eSTOR Cloudflare Worker configuration
  */
 {
@@ -16,6 +16,7 @@
 "secrets": {
 "required": [
 "GOOGLE_SERVICE_ACCOUNT_EMAIL",
+"GOOGLE_PRIVATE_KEY_ID",
 "GOOGLE_PRIVATE_KEY"
 ]
 },
