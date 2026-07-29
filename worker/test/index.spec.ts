@@ -16,6 +16,9 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 const TEST_SERVICE_ACCOUNT_EMAIL = "worker-test@example.invalid";
 const TEST_PRIVATE_KEY_ID = "test-key-id";
 const TEST_ACCESS_TOKEN = "test-access-token";
+const PRODUCTION_ORIGIN = "https://itumelaka.github.io";
+const LOCAL_ORIGIN = "http://localhost:5173";
+const DISALLOWED_ORIGIN = "https://example.com";
 
 let testPrivateKey: string;
 
@@ -60,9 +63,14 @@ function createTestEnv() {
 	};
 }
 
-async function dispatch(path: string, method = "GET"): Promise<Response> {
+async function dispatch(
+	path: string,
+	method = "GET",
+	headers?: HeadersInit,
+): Promise<Response> {
 	const request = new IncomingRequest(`https://ituestor.test${path}`, {
 		method,
+		headers,
 	});
 	const context = createExecutionContext();
 	const response = await worker.fetch(request, createTestEnv(), context);
@@ -273,5 +281,93 @@ describe("ITU eSTOR Worker", () => {
 			error: "NOT_FOUND",
 			message: "Endpoint tidak ditemui.",
 		});
+	});
+
+	it("adds CORS headers for the production frontend on GET /health", async () => {
+		const response = await dispatch("/health", "GET", {
+			Origin: PRODUCTION_ORIGIN,
+		});
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+			PRODUCTION_ORIGIN,
+		);
+		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
+			"GET, OPTIONS",
+		);
+		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
+			"Content-Type, Authorization",
+		);
+		expect(response.headers.get("Access-Control-Max-Age")).toBe("86400");
+	});
+
+	it("allows a configured localhost origin", async () => {
+		const response = await dispatch("/health", "GET", {
+			Origin: LOCAL_ORIGIN,
+		});
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+			LOCAL_ORIGIN,
+		);
+	});
+
+	it("does not add an allow-origin header for a disallowed origin", async () => {
+		const response = await dispatch("/health", "GET", {
+			Origin: DISALLOWED_ORIGIN,
+		});
+
+		expect(response.status).toBe(200);
+		expect(response.headers.has("Access-Control-Allow-Origin")).toBe(false);
+	});
+
+	it("handles a successful production OPTIONS preflight", async () => {
+		const response = await dispatch("/api/items", "OPTIONS", {
+			Origin: PRODUCTION_ORIGIN,
+			"Access-Control-Request-Method": "GET",
+			"Access-Control-Request-Headers": "Content-Type, Authorization",
+		});
+
+		expect(response.status).toBe(204);
+		expect(await response.text()).toBe("");
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(
+			PRODUCTION_ORIGIN,
+		);
+		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
+			"GET, OPTIONS",
+		);
+		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
+			"Content-Type, Authorization",
+		);
+		expect(response.headers.get("Access-Control-Max-Age")).toBe("86400");
+	});
+
+	it("rejects a disallowed OPTIONS preflight safely", async () => {
+		const response = await dispatch("/api/items", "OPTIONS", {
+			Origin: DISALLOWED_ORIGIN,
+			"Access-Control-Request-Method": "GET",
+		});
+		const body = await response.json<{
+			error: string;
+			message: string;
+		}>();
+		const serializedBody = JSON.stringify(body);
+
+		expect(response.status).toBe(403);
+		expect(body).toEqual({
+			error: "CORS_ORIGIN_DENIED",
+			message: "Origin tidak dibenarkan.",
+		});
+		expect(response.headers.has("Access-Control-Allow-Origin")).toBe(false);
+		expect(serializedBody).not.toContain("PRIVATE KEY");
+		expect(serializedBody).not.toContain(TEST_SERVICE_ACCOUNT_EMAIL);
+	});
+
+	it("sets Vary: Origin for allowed cross-origin responses", async () => {
+		const response = await dispatch("/health", "GET", {
+			Origin: PRODUCTION_ORIGIN,
+		});
+
+		expect(response.headers.get("Vary")).toBe("Origin");
 	});
 });

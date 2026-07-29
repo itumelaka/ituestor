@@ -6,6 +6,39 @@ GOOGLE_SERVICE_ACCOUNT_EMAIL: string;
 GOOGLE_PRIVATE_KEY_ID: string;
 GOOGLE_PRIVATE_KEY: string;
 }
+const ALLOWED_ORIGINS = new Set([
+"https://itumelaka.github.io",
+"http://localhost:3000",
+"http://localhost:5173",
+"http://127.0.0.1:3000",
+"http://127.0.0.1:5173",
+]);
+
+function getCorsHeaders(origin: string): Headers {
+return new Headers({
+"Access-Control-Allow-Origin": origin,
+"Access-Control-Allow-Methods": "GET, OPTIONS",
+"Access-Control-Allow-Headers": "Content-Type, Authorization",
+"Access-Control-Max-Age": "86400",
+Vary: "Origin",
+});
+}
+
+function addCorsHeaders(response: Response, origin: string | null): Response {
+if (!origin || !ALLOWED_ORIGINS.has(origin)) {
+return response;
+}
+
+const headers = new Headers(response.headers);
+getCorsHeaders(origin).forEach((value, key) => headers.set(key, value));
+
+return new Response(response.body, {
+status: response.status,
+statusText: response.statusText,
+headers,
+});
+}
+
 interface GoogleTokenResponse {
 access_token: string;
 token_type: string;
@@ -134,15 +167,39 @@ return sheetsResponse.json<SheetsValuesResponse>();
 
 export default {
 async fetch(request, env): Promise<Response> {
+const origin = request.headers.get("Origin");
+
+if (request.method === "OPTIONS") {
+if (!origin || !ALLOWED_ORIGINS.has(origin)) {
+return Response.json(
+{
+error: "CORS_ORIGIN_DENIED",
+message: "Origin tidak dibenarkan.",
+},
+{
+status: 403,
+headers: {
+Vary: "Origin",
+},
+},
+);
+}
+
+return new Response(null, {
+status: 204,
+headers: getCorsHeaders(origin),
+});
+}
+
 const url = new URL(request.url);
 
 if (request.method === "GET" && url.pathname === "/health") {
-return Response.json({
+return addCorsHeaders(Response.json({
 service: "ITU eSTOR API",
 status: "running",
 environment: env.APP_ENV,
 timestamp: new Date().toISOString(),
-});
+}), origin);
 }
 
 if (request.method === "GET" && url.pathname === "/api/items") {
@@ -179,16 +236,16 @@ updatedAt: record.UPDATED_AT,
 };
 });
 
-return Response.json({
+return addCorsHeaders(Response.json({
 success: true,
 sheet: env.MASTER_ITEM_SHEET,
 count: items.length,
 items,
-});
+}), origin);
 } catch (error) {
 console.error(error);
 
-return Response.json(
+return addCorsHeaders(Response.json(
 {
 success: false,
 error: "GOOGLE_SHEETS_ERROR",
@@ -198,16 +255,16 @@ error instanceof Error
 : "Gagal membaca Google Sheet.",
 },
 { status: 500 },
-);
+), origin);
 }
 }
 
-return Response.json(
+return addCorsHeaders(Response.json(
 {
 error: "NOT_FOUND",
 message: "Endpoint tidak ditemui.",
 },
 { status: 404 },
-);
+), origin);
 },
 } satisfies ExportedHandler<Env>;
