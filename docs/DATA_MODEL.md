@@ -9,14 +9,27 @@ Dokumen ini mentakrifkan model data pengeluaran untuk ITU eSTOR, sistem pengurus
 - `HOUSE HOLD`
 - `LAIN-LAIN`
 
-Empat tab tersebut ialah sumber migrasi sejarah dan **tidak boleh dipadam, dinamakan semula atau ditulis ganti**. Tab pengeluaran akan ditambah kemudian dan diakses melalui Cloudflare Worker. GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth mengesahkan identiti pengguna, manakala Cloudflare Worker menguatkuasakan peranan dan peraturan data.
+Empat tab tersebut ialah sumber migrasi sejarah dan **tidak boleh dipadam, dinamakan semula atau ditulis ganti**.
+
+Enam tab pengeluaran kini telah diwujudkan dalam spreadsheet yang sama:
+
+- `MASTER_ITEM`
+- `TRANSACTIONS`
+- `USERS`
+- `REQUESTS`
+- `AUDIT_LOG`
+- `SETTINGS`
+
+Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. Pada masa ini, hanya `MASTER_ITEM` didedahkan melalui Cloudflare Worker pengeluaran menggunakan endpoint baca sahaja `GET /api/items`. Lima tab pengeluaran lain belum didedahkan melalui API.
+
+GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth dirancang untuk mengesahkan identiti pengguna, tetapi belum diintegrasikan dalam aliran frontend/backend yang aktif. Penguatkuasaan peranan, operasi tulis dan pengiraan stok berasaskan transaksi juga masih belum dilaksanakan.
 
 Semua cap masa menggunakan zon `Asia/Kuala_Lumpur`, mata wang ialah Ringgit Malaysia (RM), dan alamat e-mel disimpan dalam huruf kecil.
 
 ## 2. Prinsip teras
 
-1. `MASTER_ITEM` menyimpan definisi item, bukan baki stok yang boleh diedit.
-2. Stok semasa dikira daripada `STOK_AWAL` dan transaksi berstatus sah.
+1. `MASTER_ITEM` menyimpan definisi item dan stok awal migrasi, bukan baki stok semasa yang boleh diedit.
+2. Stok semasa akan dikira daripada `STOK_AWAL` dan transaksi berstatus sah apabila modul transaksi dilaksanakan.
 3. Baris transaksi yang telah dimuktamadkan tidak boleh diubah atau dipadam.
 4. Pembetulan transaksi dibuat melalui transaksi pelarasan baharu.
 5. Rekod operasi menggunakan *soft deletion* melalui `STATUS`, bukan pemadaman fizikal.
@@ -36,7 +49,7 @@ STOK_SEMASA =
   - ROSAK_LUPUS
 ```
 
-Hanya transaksi dengan `STATUS = SAH` diambil kira. Kuantiti disimpan sebagai nombor positif; kesan tambah atau tolak ditentukan oleh `JENIS`.
+Apabila modul transaksi dilaksanakan, hanya transaksi dengan `STATUS = SAH` akan diambil kira. Kuantiti disimpan sebagai nombor positif; kesan tambah atau tolak ditentukan oleh `JENIS`. Formula ini ialah reka bentuk sasaran dan belum digunakan oleh Worker pengeluaran semasa.
 
 ## 3. Ringkasan hubungan
 
@@ -320,13 +333,21 @@ Audit diwajibkan untuk:
 - perubahan tetapan;
 - cubaan akses yang ditolak bagi tindakan sensitif.
 
-## 11. Urutan pelaksanaan disyorkan
+## 11. Status pelaksanaan dan urutan seterusnya
 
-1. Lindungi dan sandarkan empat tab legasi.
-2. Tambah `MASTER_ITEM` dan migrasikan data mengikut `SPREADSHEET_MAPPING.md`.
-3. Rekonsiliasi 130 item dan nilai sumber.
-4. Tambah `USERS` dengan akaun `ITU Melaka`.
-5. Tambah `TRANSACTIONS`, kemudian sahkan pengiraan stok.
-6. Tambah `REQUESTS`, `AUDIT_LOG` dan `SETTINGS`.
-7. Hadkan semua operasi tulis kepada Cloudflare Worker.
-8. Aktifkan integrasi frontend hanya selepas validasi dan ujian akses selesai.
+Selesai dan disahkan:
+
+1. Empat tab legasi dikekalkan tanpa perubahan.
+2. Enam tab pengeluaran telah diwujudkan.
+3. `MASTER_ITEM` telah dimigrasikan dan direkonsiliasi kepada 130 item.
+4. Cloudflare Worker pengeluaran membaca semua 130 item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
+
+Kerja seterusnya:
+
+1. Sambungkan frontend kepada endpoint baca `GET /api/items`.
+2. Integrasikan Supabase Google Auth dan pengesahan token pada Worker.
+3. Kuatkuasakan akses berasaskan peranan.
+4. Laksanakan endpoint transaksi serta pengiraan stok semasa.
+5. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
+6. Hadkan semua operasi tulis kepada Cloudflare Worker.
+7. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.

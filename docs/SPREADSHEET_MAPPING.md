@@ -17,6 +17,29 @@ Tab sumber:
 
 Tab sumber ialah rekod sejarah. Proses migrasi hanya membaca tab tersebut dan **tidak boleh memadam, menulis ganti, menyusun semula atau menamakan semula** mana-mana tab atau baris sumber.
 
+## Status migrasi disahkan — 29 Julai 2026
+
+Migrasi ke `MASTER_ITEM` telah selesai:
+
+| Kategori | Rekod dimigrasikan |
+|---|---:|
+| `ALAT TULIS` | 63 |
+| `BAHAN KIMIA` | 16 |
+| `HOUSE HOLD` | 40 |
+| `LAIN-LAIN` | 11 |
+| **Jumlah** | **130** |
+
+Hasil rekonsiliasi:
+
+- `MASTER_ITEM` mengandungi 130 rekod berstruktur.
+- Jumlah kuantiti awal ialah **274**.
+- Jumlah nilai awal ialah **RM2,334.40**.
+- Keempat-empat tab legasi dikekalkan tanpa perubahan.
+- Cloudflare Worker pengeluaran berjaya membaca dan mengembalikan semua 130 item berstruktur melalui `GET /api/items`.
+- Google Sheet dikongsi kepada akaun perkhidmatan sebagai Viewer dan dibaca menggunakan skop Google Sheets baca sahaja.
+
+Status ini tidak membuktikan bahawa sandaran bertarikh, checksum, semakan visual sampel atau kelulusan manual telah dilaksanakan. Perkara tersebut kekal tidak ditandakan sehingga bukti tersedia.
+
 ## 2. Jumlah rekonsiliasi sumber
 
 | Tab sumber | Jangkaan item | Kategori pengeluaran | Awalan ID |
@@ -161,10 +184,10 @@ Hasilkan laporan semakan bagi:
 
 ### Struktur
 
-- [ ] Spreadsheet ID sepadan dengan `1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4`.
-- [ ] Keempat-empat tab sumber wujud dengan nama tepat.
+- [x] Spreadsheet ID sepadan dengan `1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4`.
+- [x] Keempat-empat tab sumber wujud dengan nama tepat.
 - [ ] Tajuk lajur sumber lengkap dan berada pada baris yang dikenal pasti.
-- [ ] Tiada penulisan akan dibuat kepada tab legasi.
+- [x] Tab legasi dikekalkan tanpa perubahan semasa migrasi.
 - [ ] Salinan sandaran atau eksport bertarikh telah dibuat.
 
 ### Kandungan
@@ -189,9 +212,9 @@ Hasilkan laporan semakan bagi:
 
 ## 8. Rekonsiliasi migrasi
 
-Selepas normalisasi dan sebelum muat naik:
+Rekonsiliasi sumber dan migrasi yang disahkan:
 
-| Kategori | Sumber dijangka | Migrasi dijangka |
+| Kategori | Sumber dijangka | Migrasi disahkan |
 |---|---:|---:|
 | `ALAT TULIS` | 63 | 63 |
 | `BAHAN KIMIA` | 16 | 16 |
@@ -237,10 +260,13 @@ Jika rekod pendua diluluskan untuk digabung, jumlah akhir `MASTER_ITEM` mungkin 
 - [ ] Semua `STOK_MINIMUM` awal bernilai `0`.
 - [ ] Semua `STATUS` awal bernilai `AKTIF`.
 - [ ] Semua timestamp menggunakan format dan zon masa yang diluluskan.
-- [ ] Jumlah rekod mengikut kategori telah direkonsiliasi.
+- [x] Jumlah rekod mengikut kategori telah direkonsiliasi kepada 130 item.
 - [ ] Sampel sekurang-kurangnya lima rekod setiap kategori telah dibandingkan secara visual dengan sumber.
-- [ ] Tab legasi tidak berubah; bilangan baris dan nilai asal kekal sama.
-- [ ] Dashboard/backend belum dihalakan kepada `MASTER_ITEM` sebelum kelulusan akhir.
+- [x] Tab legasi dikekalkan tanpa perubahan.
+- [x] Jumlah kuantiti awal telah direkonsiliasi kepada 274.
+- [x] Jumlah nilai awal telah direkonsiliasi kepada RM2,334.40.
+- [x] Worker pengeluaran berjaya membaca 130 item berstruktur daripada `MASTER_ITEM`.
+- [ ] Frontend disambungkan kepada Worker pengeluaran.
 
 ## 11. Strategi rollback
 
