@@ -158,28 +158,12 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   display: none; width: 42px; height: 42px; flex: 0 0 auto; border: 0;
   background: #fff; border-radius: 11px; box-shadow: var(--shadow); cursor: pointer;
 }
-.institution-block { display: flex; align-items: center; gap: 15px; min-width: 410px; }
-.kpkm-logo-crop {
-  position: relative; display: block; width: 78px; height: 65px; flex: 0 0 auto;
-  overflow: hidden;
+.header-tools {
+  display: flex; flex: 1 1 auto; min-width: 0; align-items: center;
+  justify-content: flex-end; gap: 17px;
 }
-.kpkm-logo-crop img {
-  position: absolute; width: 89px; height: 89px; left: 50%; top: -3px;
-  object-fit: contain; transform: translateX(-50%);
-}
-.institution-block p { margin: 0; font-size: 12px; font-weight: 900; line-height: 1.45; }
-.divider { width: 1px; height: 58px; margin-left: 6px; background: #aaa49b; }
-.itu-logo-crop {
-  position: relative; display: block; width: 105px; height: 63px; flex: 0 0 auto;
-  overflow: hidden;
-}
-.itu-logo-crop img {
-  position: absolute; width: 108px; height: 61px; left: 50%; top: 0;
-  object-fit: cover; object-position: center 10%; transform: translateX(-50%);
-}
-.header-tools { display: flex; align-items: center; gap: 17px; min-width: 0; }
 .search {
-  display: flex; width: clamp(220px, 27vw, 350px); height: 44px; align-items: center;
+  display: flex; width: clamp(280px, 38vw, 560px); height: 44px; align-items: center;
   padding: 0 14px; background: #fbf8f4; border: 1px solid #eee5dc;
   border-radius: 22px; box-shadow: var(--shadow); transition: box-shadow .2s;
 }
@@ -291,7 +275,9 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
   .hero { height: 270px; }
 }
 @media (max-width: 1250px) {
-  .institution-block { min-width: 300px; }.institution-block p { display: none; }
+  .top-header { gap: 16px; padding-inline: 20px; }
+  .header-tools { gap: 12px; }
+  .search { width: clamp(240px, 42vw, 480px); }
   .stats { grid-template-columns: repeat(3, minmax(0,1fr)); }
   .panel-grid { grid-template-columns: 1fr 1fr; }.recent { grid-column: 1 / -1; }
   .panel { height: 255px; }.quick-row { grid-template-columns: repeat(3, 1fr); }.quick-panel { padding-bottom: 10px; }
@@ -302,11 +288,13 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
   .drawer-backdrop { position: fixed; z-index: 35; inset: 0; background: rgba(15,27,42,.45); backdrop-filter: blur(2px); }
   .drawer-backdrop:not([hidden]) { display: block; }
   .workspace { margin-left: 0; }.menu-toggle { display: grid; place-items: center; }
-  .institution-block { min-width: 0; }.kpkm-logo-crop, .divider { display: none; }
+  .top-header { gap: 12px; padding-inline: 14px; }
+  .header-tools { flex: 1 1 auto; gap: 9px; }
+  .search { width: clamp(200px, 45vw, 420px); }
 }
 @media (max-width: 720px) {
   :root { --header: 72px; }
-  .top-header { padding: 8px 14px; }.itu-logo-crop { width: 72px; height: 48px; }.itu-logo-crop img { width: 74px; height: 44px; }
+  .top-header { gap: 10px; padding: 8px 14px; }
   .search { width: 44px; padding: 0; justify-content: center; }.search input { position: absolute; width: 1px; opacity: 0; pointer-events: none; }
   .search:focus-within { position: absolute; z-index: 4; right: 12px; width: calc(100% - 78px); padding: 0 14px; justify-content: initial; }
   .search:focus-within input { position: static; width: 100%; opacity: 1; pointer-events: auto; }
@@ -317,8 +305,13 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
   .panel-grid { grid-template-columns: 1fr; }.recent { grid-column: auto; }.panel { height: auto; min-height: 250px; }
   .quick-row { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
+@media (max-width: 600px) {
+  .top-header { gap: 8px; padding-inline: 10px; }
+  .header-tools { gap: 6px; }
+}
 @media (max-width: 440px) {
-  .institution-block { display: none; }.top-header { justify-content: space-between; }
+  .top-header { gap: 6px; padding-inline: 8px; justify-content: space-between; }
+  .header-tools { gap: 4px; }
   .stats { grid-template-columns: 1fr; }.stat { height: 95px; }
   .category-body { flex-direction: column; }.panel.category-panel { min-height: 350px; }
   .quick-row { gap: 8px; }.quick { gap: 7px; }.quick i { font-size: 24px; }
