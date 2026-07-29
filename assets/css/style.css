@@ -190,11 +190,14 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 main { max-width: 1680px; margin: 0 auto; padding: 14px 18px 16px; }
 .hero {
-  position: relative; overflow: hidden; background: #efe0cb; border: 1px solid #e9d7c3;
+  position: relative; display: flex; overflow: hidden; align-items: center; justify-content: center;
+  background: #efe0cb; border: 1px solid #e9d7c3;
   border-radius: 20px; box-shadow: var(--shadow);
 }
 .hero img {
-  display: block; width: 100%; height: auto; object-fit: contain; object-position: center;
+  display: block; width: auto; max-width: 100%; height: auto;
+  max-height: calc(100vh - var(--header) - 28px);
+  object-fit: contain; object-position: center;
 }
 
 .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 13px; }
