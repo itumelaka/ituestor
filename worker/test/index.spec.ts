@@ -62,6 +62,8 @@ function createTestEnv() {
 		SPREADSHEET_ID: "test-spreadsheet-id",
 		MASTER_ITEM_SHEET: "MASTER_ITEM",
 		USERS_SHEET: "USERS",
+		TRANSACTIONS_SHEET: "TRANSACTIONS",
+		AUDIT_LOG_SHEET: "AUDIT_LOG",
 		SUPABASE_URL: TEST_SUPABASE_URL,
 		SUPABASE_PUBLISHABLE_KEY: TEST_SUPABASE_PUBLISHABLE_KEY,
 		GOOGLE_SERVICE_ACCOUNT_EMAIL: TEST_SERVICE_ACCOUNT_EMAIL,
@@ -83,6 +85,11 @@ type AuthenticatedFetchOptions = {
 	user?: TestUserRecord | null;
 	inventoryRows?: string[][];
 	googleAuthFailure?: boolean;
+	transactionRows?: string[][];
+	auditRows?: string[][];
+	failTransactionAppend?: boolean;
+	failAuditAppend?: boolean;
+	failAuditAppendOnce?: boolean;
 };
 
 const USERS_HEADERS = [
@@ -110,6 +117,16 @@ const ITEM_HEADERS = [
 	"CREATED_AT",
 	"UPDATED_AT",
 ];
+const TRANSACTION_HEADERS = [
+	"TRANSACTION_ID", "TIMESTAMP", "ITEM_ID", "JENIS", "KUANTITI",
+	"KOS_SEUNIT", "JUMLAH_NILAI", "PIHAK_TERLIBAT", "BAHAGIAN", "TUJUAN",
+	"CATATAN", "CREATED_BY_EMAIL", "CREATED_BY_NAME", "STATUS",
+];
+const AUDIT_HEADERS = [
+	"AUDIT_ID", "TIMESTAMP", "USER_EMAIL", "USER_NAME", "ACTION", "MODULE",
+	"RECORD_ID", "BEFORE_JSON", "AFTER_JSON", "DEVICE_ID", "IP_HASH", "CATATAN",
+];
+const VALID_IDEMPOTENCY_KEY = "123e4567-e89b-42d3-a456-426614174000";
 
 function bearerHeaders(token = TEST_SUPABASE_ACCESS_TOKEN): HeadersInit {
 	return { Authorization: `Bearer ${token}` };
@@ -168,6 +185,9 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 	const verifiedEmail = options.verifiedEmail ?? TEST_USER_EMAIL;
 	const user = options.user === undefined ? activeUser() : options.user;
 	const rows = options.inventoryRows ?? inventoryRows();
+	const transactions = options.transactionRows ?? [];
+	const audits = options.auditRows ?? [];
+	let auditAppendFailuresRemaining = options.failAuditAppendOnce ? 1 : 0;
 
 	return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const url =
@@ -223,6 +243,41 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 					values: [ITEM_HEADERS, ...rows],
 				});
 			}
+
+			if (decodedUrl.includes("/values/TRANSACTIONS!A:Z:append")) {
+				if (options.failTransactionAppend) {
+					return Response.json({ error: "write failed" }, { status: 500 });
+				}
+				const body = JSON.parse(String(init?.body)) as { values: string[][] };
+				transactions.push(body.values[0] ?? []);
+				return Response.json({ updates: { updatedRows: 1 } });
+			}
+
+			if (decodedUrl.includes("/values/AUDIT_LOG!A:Z:append")) {
+				if (options.failAuditAppend || auditAppendFailuresRemaining > 0) {
+					auditAppendFailuresRemaining -= 1;
+					return Response.json({ error: "write failed" }, { status: 500 });
+				}
+				const body = JSON.parse(String(init?.body)) as { values: string[][] };
+				audits.push(body.values[0] ?? []);
+				return Response.json({ updates: { updatedRows: 1 } });
+			}
+
+			if (decodedUrl.includes("/values/TRANSACTIONS!A:Z")) {
+				return Response.json({
+					range: `TRANSACTIONS!A1:N${transactions.length + 1}`,
+					majorDimension: "ROWS",
+					values: [TRANSACTION_HEADERS, ...transactions],
+				});
+			}
+
+			if (decodedUrl.includes("/values/AUDIT_LOG!A:Z")) {
+				return Response.json({
+					range: `AUDIT_LOG!A1:J${audits.length + 1}`,
+					majorDimension: "ROWS",
+					values: [AUDIT_HEADERS, ...audits],
+				});
+			}
 		}
 
 		throw new Error(`Permintaan luar tidak dijangka: ${url}`);
@@ -233,16 +288,42 @@ async function dispatch(
 	path: string,
 	method = "GET",
 	headers?: HeadersInit,
+	body?: string,
 ): Promise<Response> {
 	const request = new IncomingRequest(`https://ituestor.test${path}`, {
 		method,
 		headers,
+		body,
 	});
 	const context = createExecutionContext();
 	const response = await worker.fetch(request, createTestEnv(), context);
 
 	await waitOnExecutionContext(context);
 	return response;
+}
+
+function incomingHeaders(
+	key = VALID_IDEMPOTENCY_KEY,
+	token = TEST_SUPABASE_ACCESS_TOKEN,
+): HeadersInit {
+	return {
+		...bearerHeaders(token),
+		"Content-Type": "application/json",
+		"Idempotency-Key": key,
+	};
+}
+
+function incomingBody(overrides: Record<string, unknown> = {}): string {
+	return JSON.stringify({
+		itemId: "AT-0001",
+		kuantiti: 5,
+		kosSeunit: 12.5,
+		pihakTerlibat: "Pembekal Ujian",
+		bahagian: "Stor",
+		tujuan: "Bekalan operasi",
+		catatan: "Dokumen DO-001",
+		...overrides,
+	});
 }
 
 beforeAll(async () => {
@@ -496,6 +577,253 @@ describe("ITU eSTOR Worker", () => {
 		});
 	});
 
+	it("requires authentication for POST /api/transactions/in", async () => {
+		const response = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			{ "Content-Type": "application/json", "Idempotency-Key": VALID_IDEMPOTENCY_KEY },
+			incomingBody(),
+		);
+		const body = await response.json<{ error: string }>();
+
+		expect(response.status).toBe(401);
+		expect(body.error).toBe("AUTH_REQUIRED");
+	});
+
+	it("allows every write role and rejects VIEWER", async () => {
+		for (const role of ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]) {
+			mockAuthenticatedFetch({ user: activeUser({ role }) });
+			const response = await dispatch(
+				"/api/transactions/in",
+				"POST",
+				incomingHeaders(crypto.randomUUID()),
+				incomingBody(),
+			);
+			expect(response.status).toBe(201);
+			vi.restoreAllMocks();
+		}
+
+		mockAuthenticatedFetch({ user: activeUser({ role: "VIEWER" }) });
+		const viewerResponse = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody(),
+		);
+		expect(viewerResponse.status).toBe(403);
+		expect((await viewerResponse.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("creates a validated MASUK transaction and matching audit record", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+
+		const response = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody({
+				createdBy: "Penyamar",
+				createdByName: "Penyamar",
+				createdByEmail: "attacker@example.invalid",
+				status: "BATAL",
+				jenis: "KELUAR",
+				jumlahNilai: 999999,
+			}),
+		);
+		const body = await response.json<{
+			success: boolean;
+			replayed: boolean;
+			transaction: Record<string, unknown>;
+		}>();
+
+		expect(response.status).toBe(201);
+		expect(body.success).toBe(true);
+		expect(body.replayed).toBe(false);
+		expect(body.transaction).toMatchObject({
+			itemId: "AT-0001",
+			jenis: "MASUK",
+			kuantiti: 5,
+			kosSeunit: 12.5,
+			jumlahNilai: 62.5,
+			createdByEmail: TEST_USER_EMAIL,
+			createdByName: "ITU Melaka",
+			status: "SAH",
+		});
+		expect(String(body.transaction.transactionId)).toMatch(/^TXN-[A-F0-9]{24}$/);
+		expect(String(body.transaction.timestamp)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$/);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+		const storedTransaction = Object.fromEntries(
+			TRANSACTION_HEADERS.map((header, index) => [header, transactions[0]?.[index]]),
+		);
+		expect(storedTransaction).toMatchObject({
+			ITEM_ID: "AT-0001",
+			JENIS: "MASUK",
+			KUANTITI: 5,
+			KOS_SEUNIT: 12.5,
+			JUMLAH_NILAI: 62.5,
+			CREATED_BY_EMAIL: TEST_USER_EMAIL,
+			CREATED_BY_NAME: "ITU Melaka",
+			STATUS: "SAH",
+		});
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("AUDIT_ID")]).toMatch(/^AUD-[A-F0-9]{24}$/);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("RECORD_ID")]).toBe(body.transaction.transactionId);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("USER_EMAIL")]).toBe(TEST_USER_EMAIL);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("USER_NAME")]).toBe("ITU Melaka");
+		expect(fetchMock.mock.calls.some(([input]) => decodeURIComponent(String(input)).includes("TRANSACTIONS!A:Z:append"))).toBe(true);
+
+		const oauthCall = fetchMock.mock.calls.find(([input]) => String(input) === "https://oauth2.googleapis.com/token");
+		const assertion = new URLSearchParams(String(oauthCall?.[1]?.body)).get("assertion") ?? "";
+		const claimSegment = assertion.split(".")[1] ?? "";
+		const claims = JSON.parse(atob(claimSegment.replace(/-/g, "+").replace(/_/g, "/")));
+		expect(claims.scope).toBe("https://www.googleapis.com/auth/spreadsheets");
+	});
+
+	it.each([
+		["invalid JSON", "{", "INVALID_JSON"],
+		["missing required field", incomingBody({ itemId: "" }), "VALIDATION_ERROR"],
+		["zero quantity", incomingBody({ kuantiti: 0 }), "VALIDATION_ERROR"],
+		["negative cost", incomingBody({ kosSeunit: -1 }), "VALIDATION_ERROR"],
+		["excess cost decimals", incomingBody({ kosSeunit: 1.234 }), "VALIDATION_ERROR"],
+	])("rejects %s", async (_label, requestBody, expectedError) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			requestBody,
+		);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe(expectedError);
+	});
+
+	it("requires a valid UUID Idempotency-Key", async () => {
+		mockAuthenticatedFetch();
+		const missing = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			incomingBody(),
+		);
+		expect(missing.status).toBe(400);
+		expect((await missing.json<{ error: string }>()).error).toBe("INVALID_IDEMPOTENCY_KEY");
+		vi.restoreAllMocks();
+
+		mockAuthenticatedFetch();
+		const malformed = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders("not-a-uuid"),
+			incomingBody(),
+		);
+		expect(malformed.status).toBe(400);
+		expect((await malformed.json<{ error: string }>()).error).toBe("INVALID_IDEMPOTENCY_KEY");
+	});
+
+	it("rejects missing and inactive inventory items", async () => {
+		mockAuthenticatedFetch();
+		const missing = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody({ itemId: "TIADA" }),
+		);
+		expect(missing.status).toBe(404);
+		expect((await missing.json<{ error: string }>()).error).toBe("ITEM_NOT_FOUND");
+		vi.restoreAllMocks();
+
+		const inactiveRows = inventoryRows(1);
+		inactiveRows[0]![8] = "TIDAK_AKTIF";
+		mockAuthenticatedFetch({ inventoryRows: inactiveRows });
+		const inactive = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		expect(inactive.status).toBe(409);
+		expect((await inactive.json<{ error: string }>()).error).toBe("ITEM_INACTIVE");
+	});
+
+	it("replays the same key and payload without duplicate rows", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+
+		const first = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		const second = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		expect(first.status).toBe(201);
+		expect(second.status).toBe(200);
+		expect((await second.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("rejects a conflicting payload that reuses an idempotency key", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+		await dispatch("/api/transactions/in", "POST", incomingHeaders(), incomingBody());
+
+		const conflict = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody({ kuantiti: 6 }),
+		);
+		expect(conflict.status).toBe(409);
+		expect((await conflict.json<{ error: string }>()).error).toBe("IDEMPOTENCY_CONFLICT");
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("recovers an audit append failure without duplicating the transaction", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			transactionRows: transactions,
+			auditRows: audits,
+			failAuditAppendOnce: true,
+		});
+
+		const first = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		expect(first.status).toBe(500);
+		expect((await first.json<{ error: string }>()).error).toBe("WRITE_FAILED");
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(0);
+
+		const retry = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		expect(retry.status).toBe(200);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("returns WRITE_FAILED safely when the transaction append fails", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			transactionRows: transactions,
+			auditRows: audits,
+			failTransactionAppend: true,
+		});
+		const response = await dispatch(
+			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		const serialized = await response.text();
+		expect(response.status).toBe(500);
+		expect(JSON.parse(serialized).error).toBe("WRITE_FAILED");
+		expect(transactions).toHaveLength(0);
+		expect(audits).toHaveLength(0);
+		expect(serialized).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
+		expect(serialized).not.toContain(testPrivateKey);
+	});
+
 	it("adds CORS headers for the production frontend on GET /health", async () => {
 		const response = await dispatch("/health", "GET", {
 			Origin: PRODUCTION_ORIGIN,
@@ -506,10 +834,10 @@ describe("ITU eSTOR Worker", () => {
 			PRODUCTION_ORIGIN,
 		);
 		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-			"GET, OPTIONS",
+			"GET, POST, OPTIONS",
 		);
 		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
-			"Content-Type, Authorization",
+			"Content-Type, Authorization, Idempotency-Key",
 		);
 		expect(response.headers.get("Access-Control-Max-Age")).toBe("86400");
 	});
@@ -534,11 +862,11 @@ describe("ITU eSTOR Worker", () => {
 		expect(response.headers.has("Access-Control-Allow-Origin")).toBe(false);
 	});
 
-	it("handles a successful production OPTIONS preflight", async () => {
-		const response = await dispatch("/api/items", "OPTIONS", {
+	it("handles a Barang Masuk POST preflight with Idempotency-Key", async () => {
+		const response = await dispatch("/api/transactions/in", "OPTIONS", {
 			Origin: PRODUCTION_ORIGIN,
-			"Access-Control-Request-Method": "GET",
-			"Access-Control-Request-Headers": "Content-Type, Authorization",
+			"Access-Control-Request-Method": "POST",
+			"Access-Control-Request-Headers": "Content-Type, Authorization, Idempotency-Key",
 		});
 
 		expect(response.status).toBe(204);
@@ -547,10 +875,10 @@ describe("ITU eSTOR Worker", () => {
 			PRODUCTION_ORIGIN,
 		);
 		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-			"GET, OPTIONS",
+			"GET, POST, OPTIONS",
 		);
 		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
-			"Content-Type, Authorization",
+			"Content-Type, Authorization, Idempotency-Key",
 		);
 		expect(response.headers.get("Access-Control-Max-Age")).toBe("86400");
 	});

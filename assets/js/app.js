@@ -24,7 +24,11 @@ let supabaseClient = null;
 let accessRequest = null;
 let accessGranted = false;
 let currentSession = null;
+let currentApplicationUser = null;
 let authRetryMode = "auth";
+let incomingAttemptKey = "";
+let incomingAttemptFingerprint = "";
+let incomingSubmitting = false;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -40,6 +44,7 @@ const elements = {
   stockAlertRows: document.getElementById("stockAlertRows"),
   dashboardView: document.getElementById("dashboard"),
   registerView: document.getElementById("daftar-item"),
+  incomingView: document.getElementById("barang-masuk"),
   registerDataState: document.getElementById("registerDataState"),
   registerStateMessage: document.getElementById("registerStateMessage"),
   registerRetry: document.getElementById("registerRetry"),
@@ -70,7 +75,23 @@ const elements = {
   userAvatarImage: document.getElementById("userAvatarImage"),
   userName: document.getElementById("userName"),
   userEmail: document.getElementById("userEmail"),
-  logoutButton: document.getElementById("logoutButton")
+  logoutButton: document.getElementById("logoutButton"),
+  quickBarangMasuk: document.getElementById("quickBarangMasuk"),
+  incomingState: document.getElementById("incomingState"),
+  incomingStateMessage: document.getElementById("incomingStateMessage"),
+  retryIncoming: document.getElementById("retryIncoming"),
+  incomingForm: document.getElementById("incomingForm"),
+  incomingItemSearch: document.getElementById("incomingItemSearch"),
+  incomingItem: document.getElementById("incomingItem"),
+  incomingItemSummary: document.getElementById("incomingItemSummary"),
+  incomingQuantity: document.getElementById("incomingQuantity"),
+  incomingUnitCost: document.getElementById("incomingUnitCost"),
+  incomingParty: document.getElementById("incomingParty"),
+  incomingDivision: document.getElementById("incomingDivision"),
+  incomingPurpose: document.getElementById("incomingPurpose"),
+  incomingNotes: document.getElementById("incomingNotes"),
+  incomingTotal: document.getElementById("incomingTotal"),
+  incomingSubmit: document.getElementById("incomingSubmit")
 };
 
 const currencyFormatter = new Intl.NumberFormat("ms-MY", {
@@ -112,6 +133,12 @@ function setRegisterState(state, message) {
   elements.registerDataState.className = `data-state is-${state}`;
   elements.registerStateMessage.textContent = message;
   elements.registerRetry.hidden = state !== "error";
+}
+
+function setIncomingState(state, message, retry = false) {
+  elements.incomingState.className = `data-state is-${state}`;
+  elements.incomingStateMessage.textContent = message;
+  elements.retryIncoming.hidden = !retry;
 }
 
 function itemNumbers(item) {
@@ -231,6 +258,179 @@ function populateRegisterFilters() {
   elements.apiStatusFilterLabel.hidden = statuses.length === 0;
 }
 
+function activeIncomingItems() {
+  return loadedItems.filter((item) => String(item.status ?? "").trim().toUpperCase() === "AKTIF");
+}
+
+function populateIncomingItems() {
+  const selected = elements.incomingItem.value;
+  const query = elements.incomingItemSearch.value.trim().toLocaleLowerCase("ms");
+  const matches = activeIncomingItems().filter((item) => !query ||
+    [item.itemId, item.namaItem, item.namaItemAsal].some((value) =>
+      String(value ?? "").toLocaleLowerCase("ms").includes(query)));
+  elements.incomingItem.innerHTML = '<option value="">Pilih item</option>' +
+    matches.map((item) => `<option value="${escapeHtml(item.itemId)}">${escapeHtml(item.itemId)} — ${escapeHtml(item.namaItem || item.namaItemAsal || "Tanpa nama")}</option>`).join("");
+  if (matches.some((item) => String(item.itemId) === selected)) {
+    elements.incomingItem.value = selected;
+  }
+  updateIncomingItemSummary();
+}
+
+function selectedIncomingItem() {
+  return loadedItems.find((item) => String(item.itemId) === elements.incomingItem.value);
+}
+
+function updateIncomingItemSummary() {
+  const item = selectedIncomingItem();
+  if (!item) {
+    elements.incomingItemSummary.textContent = activeIncomingItems().length
+      ? "Pilih item aktif daripada inventori."
+      : "Tiada item aktif tersedia.";
+    return;
+  }
+  const view = itemView(item);
+  elements.incomingItemSummary.textContent =
+    `${item.itemId} · ${item.namaItem || item.namaItemAsal || "Tanpa nama"} · ${item.kategori || "Tiada kategori"} · ${item.unit || "Tiada unit"} · Stok awal ${formatNumber(view.stock)} · Kos semasa ${formatCurrency(view.cost)}`;
+  if (!elements.incomingUnitCost.value && view.cost.valid) {
+    elements.incomingUnitCost.value = view.cost.value.toFixed(2);
+  }
+}
+
+function incomingPayload() {
+  return {
+    itemId: elements.incomingItem.value,
+    kuantiti: Number(elements.incomingQuantity.value),
+    kosSeunit: Number(elements.incomingUnitCost.value),
+    pihakTerlibat: elements.incomingParty.value.trim(),
+    bahagian: elements.incomingDivision.value.trim(),
+    tujuan: elements.incomingPurpose.value.trim(),
+    catatan: elements.incomingNotes.value.trim()
+  };
+}
+
+function incomingFingerprint() {
+  const payload = incomingPayload();
+  return JSON.stringify(payload);
+}
+
+function markIncomingMaterialChange() {
+  const fingerprint = incomingFingerprint();
+  if (incomingAttemptFingerprint && fingerprint !== incomingAttemptFingerprint) {
+    incomingAttemptKey = "";
+    incomingAttemptFingerprint = "";
+  }
+  const quantity = Number(elements.incomingQuantity.value);
+  const cost = Number(elements.incomingUnitCost.value);
+  const total = Number.isFinite(quantity) && Number.isFinite(cost) && quantity > 0 && cost >= 0
+    ? quantity * cost
+    : 0;
+  elements.incomingTotal.textContent = currencyFormatter.format(total);
+  if (!incomingSubmitting) setIncomingState("ready", "");
+}
+
+function incomingErrorMessage(status, code) {
+  const messages = {
+    VALIDATION_ERROR: "Semak semua medan wajib dan nilai nombor sebelum menghantar.",
+    INVALID_JSON: "Maklumat transaksi tidak dapat dibaca.",
+    INVALID_IDEMPOTENCY_KEY: "Cubaan ini tidak mempunyai pengecam selamat. Muat semula halaman dan cuba lagi.",
+    IDEMPOTENCY_CONFLICT: "Cubaan yang sama telah digunakan untuk maklumat berbeza. Ubah borang dan cuba lagi.",
+    ITEM_NOT_FOUND: "Item yang dipilih tidak lagi ditemui.",
+    ITEM_INACTIVE: "Item yang dipilih tidak lagi aktif.",
+    ROLE_NOT_ALLOWED: "Peranan anda tidak dibenarkan merekod Barang Masuk.",
+    WRITE_FAILED: "Transaksi belum dapat disahkan tersimpan. Cuba hantar semula tanpa mengubah borang."
+  };
+  if (status === 401) return "Sesi anda telah tamat. Log keluar dan masuk semula.";
+  return messages[code] || "Transaksi tidak dapat disimpan buat masa ini.";
+}
+
+async function submitIncomingTransaction(event) {
+  if (event) event.preventDefault();
+  if (incomingSubmitting || !accessGranted) return;
+  if (!["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role)) {
+    setIncomingState("error", "Peranan anda tidak dibenarkan merekod Barang Masuk.");
+    return;
+  }
+  if (!elements.incomingForm.reportValidity()) return;
+
+  let session;
+  try {
+    const result = await supabaseClient.auth.getSession();
+    if (result.error || !result.data.session?.access_token) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    session = result.data.session;
+  } catch {
+    setIncomingState("error", "Sesi tidak dapat disemak. Cuba lagi.", true);
+    return;
+  }
+
+  const payload = incomingPayload();
+  const fingerprint = JSON.stringify(payload);
+  if (!incomingAttemptKey || incomingAttemptFingerprint !== fingerprint) {
+    incomingAttemptKey = crypto.randomUUID();
+    incomingAttemptFingerprint = fingerprint;
+  }
+
+  incomingSubmitting = true;
+  elements.incomingSubmit.disabled = true;
+  elements.incomingSubmit.textContent = "Sedang menyimpan…";
+  setIncomingState("loading", "Merekod transaksi dan audit…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/transactions/in`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+        "Idempotency-Key": incomingAttemptKey
+      },
+      body: JSON.stringify(payload)
+    });
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      // Gunakan mesej selamat lalai.
+    }
+    if (response.status === 401) {
+      showAccessGate(incomingErrorMessage(response.status, data.error), "logout");
+      return;
+    }
+    if (!response.ok || data.success !== true) {
+      const uncertain = response.status >= 500 || data.error === "WRITE_FAILED";
+      setIncomingState("error", incomingErrorMessage(response.status, data.error), uncertain);
+      return;
+    }
+
+    const transaction = data.transaction || {};
+    setIncomingState(
+      "success",
+      `${data.replayed ? "Transaksi disahkan semula" : "Barang Masuk berjaya direkodkan"}: ${transaction.transactionId || "rekod baharu"}.`
+    );
+    incomingAttemptKey = "";
+    incomingAttemptFingerprint = "";
+    elements.incomingQuantity.value = "";
+    elements.incomingParty.value = "";
+    elements.incomingDivision.value = "";
+    elements.incomingPurpose.value = "";
+    elements.incomingNotes.value = "";
+    markIncomingMaterialChange();
+    await refreshInventoryData();
+  } catch {
+    setIncomingState(
+      "error",
+      "Sambungan terputus dan status simpanan belum pasti. Cuba hantar semula tanpa mengubah borang.",
+      true
+    );
+  } finally {
+    incomingSubmitting = false;
+    elements.incomingSubmit.disabled =
+      !["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role);
+    elements.incomingSubmit.textContent = "Simpan Barang Masuk";
+  }
+}
+
 function filteredRegisterItems() {
   const query = elements.itemSearch.value.trim().toLocaleLowerCase("ms");
   const category = elements.categoryFilter.value;
@@ -337,17 +537,22 @@ function renderRegister() {
 
 function showView(hash) {
   const register = hash === "#daftar-item";
-  elements.dashboardView.hidden = register;
+  const incoming = hash === "#barang-masuk";
+  elements.dashboardView.hidden = register || incoming;
   elements.registerView.hidden = !register;
-  document.title = `${register ? "Daftar Item" : "Dashboard"} | ITU eSTOR`;
-  searchBox.hidden = register;
+  elements.incomingView.hidden = !incoming;
+  const viewTitle = register ? "Daftar Item" : incoming ? "Barang Masuk" : "Dashboard";
+  document.title = `${viewTitle} | ITU eSTOR`;
+  searchBox.hidden = register || incoming;
   navLinks.forEach((link) => {
-    const active = link.getAttribute("href") === (register ? "#daftar-item" : "#dashboard");
+    const target = register ? "#daftar-item" : incoming ? "#barang-masuk" : "#dashboard";
+    const active = link.getAttribute("href") === target;
     link.classList.toggle("active", active);
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
   if (register && loadedItems.length) renderRegister();
+  if (incoming && loadedItems.length) populateIncomingItems();
 }
 
 function openItemDetails(itemId, trigger) {
@@ -423,6 +628,9 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   inventoryRequest = null;
   inventoryLoaded = false;
   loadedItems = [];
+  currentApplicationUser = null;
+  incomingAttemptKey = "";
+  incomingAttemptFingerprint = "";
   authRetryMode = "auth";
   document.body.className = "auth-signed-out";
   elements.userProfile.hidden = true;
@@ -457,6 +665,13 @@ function showAuthorizedUser(session, applicationUser) {
   const roleLabel = elements.userProfile.querySelector("small");
   if (roleLabel) roleLabel.textContent = applicationUser.role;
   elements.userProfile.hidden = false;
+  currentApplicationUser = applicationUser;
+  const canWrite = ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(applicationUser.role);
+  elements.incomingSubmit.disabled = !canWrite;
+  elements.incomingSubmit.title = canWrite ? "" : "Peranan ini tidak dibenarkan merekod Barang Masuk.";
+  if (!canWrite) {
+    setIncomingState("error", "Peranan anda boleh membaca inventori tetapi tidak boleh merekod Barang Masuk.");
+  }
   accessGranted = true;
   document.body.className = "auth-signed-in";
   cleanOAuthUrl();
@@ -654,6 +869,7 @@ async function loadDashboardData(accessToken) {
     inventoryLoaded = true;
     renderDashboard(loadedItems, data.count);
     populateRegisterFilters();
+    populateIncomingItems();
     renderRegister();
     setDataState("ready", "");
     setRegisterState(loadedItems.length ? "ready" : "empty", loadedItems.length ? "" : "API tidak mengandungi item untuk dipaparkan.");
@@ -665,6 +881,17 @@ async function loadDashboardData(accessToken) {
     setDataState("error", "Data stok tidak dapat dimuatkan buat masa ini.");
     setRegisterState("error", "Daftar item tidak dapat dimuatkan buat masa ini.");
   }
+}
+
+async function refreshInventoryData() {
+  if (!supabaseClient || !accessGranted) return;
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) {
+    showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+    return;
+  }
+  inventoryLoaded = false;
+  await ensureInventoryData(data.session.access_token);
 }
 
 async function retryInventoryData() {
@@ -693,7 +920,7 @@ drawerBackdrop.addEventListener("click", () => toggleSidebar(false));
 navLinks.forEach((link) => {
   link.addEventListener("click", () => {
     const target = link.getAttribute("href");
-    if (target === "#dashboard" || target === "#daftar-item") showView(target);
+    if (target === "#dashboard" || target === "#daftar-item" || target === "#barang-masuk") showView(target);
     if (window.innerWidth <= 960) toggleSidebar(false);
   });
 });
@@ -724,6 +951,21 @@ searchInput.addEventListener("input", () => {
 
 elements.retryData.addEventListener("click", retryInventoryData);
 elements.registerRetry.addEventListener("click", retryInventoryData);
+elements.quickBarangMasuk.addEventListener("click", () => {
+  window.location.hash = "#barang-masuk";
+});
+elements.incomingItemSearch.addEventListener("input", populateIncomingItems);
+elements.incomingItem.addEventListener("change", () => {
+  elements.incomingUnitCost.value = "";
+  updateIncomingItemSummary();
+  markIncomingMaterialChange();
+});
+[
+  elements.incomingQuantity, elements.incomingUnitCost, elements.incomingParty,
+  elements.incomingDivision, elements.incomingPurpose, elements.incomingNotes
+].forEach((control) => control.addEventListener("input", markIncomingMaterialChange));
+elements.incomingForm.addEventListener("submit", submitIncomingTransaction);
+elements.retryIncoming.addEventListener("click", submitIncomingTransaction);
 [
   elements.itemSearch, elements.categoryFilter, elements.stockFilter,
   elements.apiStatusFilter, elements.itemSort

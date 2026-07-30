@@ -153,7 +153,7 @@
         <section class="quick-panel" aria-labelledby="quick-title">
           <h3 id="quick-title">PINTASAN PANTAS</h3>
           <div class="quick-row">
-            <button class="quick quick-blue" type="button"><i>📥</i><span>BARANG<br>MASUK</span></button>
+            <button class="quick quick-blue" id="quickBarangMasuk" type="button"><i>📥</i><span>BARANG<br>MASUK</span></button>
             <button class="quick quick-green" type="button"><i>📤</i><span>BARANG<br>KELUAR</span></button>
             <button class="quick quick-yellow" type="button"><i>📋</i><span>PERMOHONAN<br>BARU</span></button>
             <button class="quick quick-purple" type="button"><i>📊</i><span>LAPORAN</span></button>
@@ -238,6 +238,86 @@
             <span id="pageSummary">Halaman —</span>
             <button id="nextPage" type="button">Seterusnya →</button>
           </nav>
+        </section>
+      </main>
+
+      <main id="barang-masuk" class="page-view incoming-page" hidden>
+        <section class="register-heading">
+          <div>
+            <p class="eyebrow">TRANSAKSI INVENTORI</p>
+            <h1>Barang Masuk</h1>
+            <p>Rekod penerimaan stok sebenar. Stok awal dalam MASTER_ITEM tidak diubah oleh transaksi ini.</p>
+          </div>
+          <span class="register-icon" aria-hidden="true">📥</span>
+        </section>
+
+        <div class="data-state is-ready" id="incomingState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="incomingStateMessage"></span>
+          <button id="retryIncoming" type="button" hidden>Cuba hantar semula</button>
+        </div>
+
+        <section class="incoming-layout">
+          <form id="incomingForm" class="incoming-form" novalidate>
+            <div class="form-section">
+              <h2>Maklumat item</h2>
+              <label class="field-wide">
+                <span>Cari item</span>
+                <input id="incomingItemSearch" type="search" placeholder="Tapis mengikut ID atau nama item" autocomplete="off">
+              </label>
+              <label class="field-wide">
+                <span>Item <b aria-hidden="true">*</b></span>
+                <select id="incomingItem" required>
+                  <option value="">Pilih item</option>
+                </select>
+              </label>
+              <div class="selected-item" id="incomingItemSummary">Pilih item aktif daripada inventori.</div>
+            </div>
+
+            <div class="form-section form-grid">
+              <h2 class="field-wide">Butiran penerimaan</h2>
+              <label>
+                <span>Kuantiti <b aria-hidden="true">*</b></span>
+                <input id="incomingQuantity" type="number" min="0.01" step="any" inputmode="decimal" required>
+              </label>
+              <label>
+                <span>Kos seunit (RM) <b aria-hidden="true">*</b></span>
+                <input id="incomingUnitCost" type="number" min="0" max="1000000000" step="0.01" inputmode="decimal" required>
+              </label>
+              <label>
+                <span>Pihak terlibat <b aria-hidden="true">*</b></span>
+                <input id="incomingParty" type="text" maxlength="160" required>
+              </label>
+              <label>
+                <span>Bahagian <b aria-hidden="true">*</b></span>
+                <input id="incomingDivision" type="text" maxlength="120" required>
+              </label>
+              <label class="field-wide">
+                <span>Tujuan <b aria-hidden="true">*</b></span>
+                <input id="incomingPurpose" type="text" maxlength="300" required>
+              </label>
+              <label class="field-wide">
+                <span>Catatan</span>
+                <textarea id="incomingNotes" maxlength="1000" rows="4"></textarea>
+              </label>
+            </div>
+
+            <div class="incoming-submit">
+              <div><small>Jumlah nilai</small><strong id="incomingTotal">RM0.00</strong></div>
+              <button id="incomingSubmit" type="submit">Simpan Barang Masuk</button>
+            </div>
+          </form>
+
+          <aside class="incoming-guide" aria-label="Panduan Barang Masuk">
+            <h2>Rekod selamat</h2>
+            <p>Identiti pencipta, masa, jenis transaksi dan status ditetapkan oleh pelayan.</p>
+            <ul>
+              <li>Jenis transaksi: <strong>MASUK</strong></li>
+              <li>Status transaksi: <strong>SAH</strong></li>
+              <li>Setiap cubaan mempunyai kunci pendua yang selamat.</li>
+              <li>Audit direkodkan bersama transaksi.</li>
+            </ul>
+          </aside>
         </section>
       </main>
     </div>

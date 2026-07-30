@@ -3,6 +3,8 @@ interface Env {
 	SPREADSHEET_ID: string;
 	MASTER_ITEM_SHEET: string;
 	USERS_SHEET: string;
+	TRANSACTIONS_SHEET: string;
+	AUDIT_LOG_SHEET: string;
 	SUPABASE_URL: string;
 	SUPABASE_PUBLISHABLE_KEY: string;
 	GOOGLE_SERVICE_ACCOUNT_EMAIL: string;
@@ -24,6 +26,10 @@ const ALLOWED_ROLES = new Set([
 	"PEMBANTU_STOR",
 	"VIEWER",
 ]);
+const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]);
+const MAX_JSON_BODY_BYTES = 16 * 1024;
+const IDEMPOTENCY_KEY_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface GoogleTokenResponse {
 	access_token: string;
@@ -51,6 +57,33 @@ interface AuthorizedUser {
 	status: string;
 }
 
+interface IncomingTransactionPayload {
+	itemId: string;
+	kuantiti: number;
+	kosSeunit: number;
+	pihakTerlibat: string;
+	bahagian: string;
+	tujuan: string;
+	catatan: string;
+}
+
+interface TransactionResult {
+	transactionId: string;
+	timestamp: string;
+	itemId: string;
+	jenis: "MASUK";
+	kuantiti: number;
+	kosSeunit: number;
+	jumlahNilai: number;
+	pihakTerlibat: string;
+	bahagian: string;
+	tujuan: string;
+	catatan: string;
+	createdByName: string;
+	createdByEmail: string;
+	status: "SAH";
+}
+
 class ApiError extends Error {
 	constructor(
 		readonly status: number,
@@ -64,8 +97,8 @@ class ApiError extends Error {
 function getCorsHeaders(origin: string): Headers {
 	return new Headers({
 		"Access-Control-Allow-Origin": origin,
-		"Access-Control-Allow-Methods": "GET, OPTIONS",
-		"Access-Control-Allow-Headers": "Content-Type, Authorization",
+		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key",
 		"Access-Control-Max-Age": "86400",
 		Vary: "Origin",
 	});
@@ -143,7 +176,7 @@ async function getGoogleAccessToken(env: Env): Promise<string> {
 	}));
 	const encodedClaims = base64UrlEncode(JSON.stringify({
 		iss: env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-		scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+		scope: "https://www.googleapis.com/auth/spreadsheets",
 		aud: "https://oauth2.googleapis.com/token",
 		iat: now,
 		exp: now + 3600,
@@ -230,6 +263,221 @@ function rowsToRecords(sheetData: SheetsValuesResponse): Array<Record<string, st
 	return rows.slice(1).map((row) => Object.fromEntries(
 		headers.map((header, index) => [header, String(row[index] ?? "").trim()]),
 	));
+}
+
+function sheetHeaders(sheetData: SheetsValuesResponse): string[] {
+	return (sheetData.values?.[0] ?? []).map((header) => String(header).trim());
+}
+
+async function appendSheetRecord(
+	env: Env,
+	sheetName: string,
+	googleAccessToken: string,
+	headers: string[],
+	record: Record<string, string | number>,
+): Promise<void> {
+	if (headers.length === 0) {
+		throw new ApiError(500, "WRITE_FAILED", "Rekod tidak dapat disimpan.");
+	}
+
+	const range = encodeURIComponent(`${sheetName}!A:Z`);
+	let response: Response;
+	try {
+		response = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${googleAccessToken}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					majorDimension: "ROWS",
+					values: [headers.map((header) => record[header] ?? "")],
+				}),
+			},
+		);
+	} catch {
+		throw new ApiError(500, "WRITE_FAILED", "Rekod tidak dapat disimpan.");
+	}
+
+	if (!response.ok) {
+		throw new ApiError(500, "WRITE_FAILED", "Rekod tidak dapat disimpan.");
+	}
+}
+
+async function readJsonBody(request: Request): Promise<unknown> {
+	const contentType = request.headers.get("Content-Type") ?? "";
+	if (!contentType.toLowerCase().includes("application/json")) {
+		throw new ApiError(400, "INVALID_JSON", "Badan permintaan mesti JSON yang sah.");
+	}
+
+	const contentLength = Number(request.headers.get("Content-Length") ?? 0);
+	if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Badan permintaan terlalu besar.");
+	}
+
+	const reader = request.body?.getReader();
+	if (!reader) {
+		throw new ApiError(400, "INVALID_JSON", "Badan permintaan mesti JSON yang sah.");
+	}
+
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > MAX_JSON_BODY_BYTES) {
+			await reader.cancel();
+			throw new ApiError(400, "VALIDATION_ERROR", "Badan permintaan terlalu besar.");
+		}
+		chunks.push(value);
+	}
+
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes));
+	} catch {
+		throw new ApiError(400, "INVALID_JSON", "Badan permintaan mesti JSON yang sah.");
+	}
+}
+
+function requiredText(
+	value: unknown,
+	fieldName: string,
+	maxLength: number,
+	optional = false,
+): string {
+	if (typeof value !== "string") {
+		if (optional && (value === undefined || value === null)) return "";
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	const normalized = value.trim();
+	if ((!optional && !normalized) || normalized.length > maxLength) {
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	return normalized;
+}
+
+function requiredNumber(
+	value: unknown,
+	fieldName: string,
+	allowZero: boolean,
+	maximum: number,
+	requireTwoDecimals = false,
+): number {
+	if (
+		(typeof value !== "number" && typeof value !== "string") ||
+		(typeof value === "string" && !value.trim())
+	) {
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	const number = Number(value);
+	if (
+		!Number.isFinite(number) ||
+		(allowZero ? number < 0 : number <= 0) ||
+		number > maximum ||
+		(requireTwoDecimals && Math.abs(number * 100 - Math.round(number * 100)) > 1e-8)
+	) {
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	return number;
+}
+
+function validateIncomingTransaction(value: unknown): IncomingTransactionPayload {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat transaksi tidak sah.");
+	}
+	const body = value as Record<string, unknown>;
+	return {
+		itemId: requiredText(body.itemId, "Item", 80),
+		kuantiti: requiredNumber(body.kuantiti, "Kuantiti", false, 1_000_000_000),
+		kosSeunit: requiredNumber(body.kosSeunit, "Kos seunit", true, 1_000_000_000, true),
+		pihakTerlibat: requiredText(body.pihakTerlibat, "Pihak terlibat", 160),
+		bahagian: requiredText(body.bahagian, "Bahagian", 120),
+		tujuan: requiredText(body.tujuan, "Tujuan", 300),
+		catatan: requiredText(body.catatan, "Catatan", 1000, true),
+	};
+}
+
+function idempotencyKey(request: Request): string {
+	const key = request.headers.get("Idempotency-Key")?.trim() ?? "";
+	if (!IDEMPOTENCY_KEY_PATTERN.test(key)) {
+		throw new ApiError(
+			400,
+			"INVALID_IDEMPOTENCY_KEY",
+			"Kunci idempotensi UUID yang sah diperlukan.",
+		);
+	}
+	return key.toLowerCase();
+}
+
+async function stableId(prefix: "TXN" | "AUD", key: string): Promise<string> {
+	// ID deterministik menjadikan TRANSACTIONS/AUDIT_LOG sendiri sebagai stor
+	// idempotensi kekal. Retry membaca ID ini semula; jika audit terdahulu gagal,
+	// hanya audit ditambah supaya transaksi stok tidak digandakan.
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(`${prefix}:${key}`),
+	);
+	const suffix = Array.from(new Uint8Array(digest).slice(0, 12), (byte) =>
+		byte.toString(16).padStart(2, "0")
+	).join("").toUpperCase();
+	return `${prefix}-${suffix}`;
+}
+
+function malaysiaTimestamp(date = new Date()): string {
+	const parts = Object.fromEntries(
+		new Intl.DateTimeFormat("en-CA", {
+			timeZone: "Asia/Kuala_Lumpur",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			hourCycle: "h23",
+		}).formatToParts(date).map(({ type, value }) => [type, value]),
+	);
+	return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
+}
+
+function transactionRecord(result: TransactionResult): Record<string, string | number> {
+	return {
+		TRANSACTION_ID: result.transactionId,
+		TIMESTAMP: result.timestamp,
+		ITEM_ID: result.itemId,
+		JENIS: result.jenis,
+		KUANTITI: result.kuantiti,
+		KOS_SEUNIT: result.kosSeunit,
+		JUMLAH_NILAI: result.jumlahNilai,
+		PIHAK_TERLIBAT: result.pihakTerlibat,
+		BAHAGIAN: result.bahagian,
+		TUJUAN: result.tujuan,
+		CATATAN: result.catatan,
+		CREATED_BY_EMAIL: result.createdByEmail,
+		CREATED_BY_NAME: result.createdByName,
+		STATUS: result.status,
+	};
+}
+
+function matchesExistingTransaction(
+	record: Record<string, string>,
+	result: TransactionResult,
+): boolean {
+	const expected = transactionRecord(result);
+	return Object.entries(expected).every(([header, value]) => {
+		if (header === "TIMESTAMP") return true;
+		if (typeof value === "number") return Number(record[header]) === value;
+		return String(record[header] ?? "").trim() === String(value);
+	});
 }
 
 function bearerToken(request: Request): string {
@@ -404,6 +652,116 @@ async function protectedRoute(
 	});
 }
 
+async function incomingTransactionRoute(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!WRITE_ROLES.has(authorization.user.role)) {
+		throw new ApiError(
+			403,
+			"ROLE_NOT_ALLOWED",
+			"Peranan pengguna tidak dibenarkan merekod Barang Masuk.",
+		);
+	}
+
+	const key = idempotencyKey(request);
+	const payload = validateIncomingTransaction(await readJsonBody(request));
+	const [itemsData, transactionsData, auditData] = await Promise.all([
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.TRANSACTIONS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const item = rowsToRecords(itemsData).find(
+		(candidate) => String(candidate.ITEM_ID ?? "").trim() === payload.itemId,
+	);
+	if (!item) {
+		throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+	}
+	if (String(item.STATUS ?? "").trim().toUpperCase() !== "AKTIF") {
+		throw new ApiError(409, "ITEM_INACTIVE", "Item tidak aktif.");
+	}
+
+	const transactionId = await stableId("TXN", key);
+	const auditId = await stableId("AUD", key);
+	const jumlahNilai = Math.round(payload.kuantiti * payload.kosSeunit * 100) / 100;
+	if (!Number.isFinite(jumlahNilai) || jumlahNilai > 1_000_000_000_000) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Jumlah nilai tidak sah.");
+	}
+
+	const existingTransaction = rowsToRecords(transactionsData).find(
+		(record) => record.TRANSACTION_ID === transactionId,
+	);
+	const result: TransactionResult = {
+		transactionId,
+		timestamp: existingTransaction?.TIMESTAMP || malaysiaTimestamp(),
+		itemId: payload.itemId,
+		jenis: "MASUK",
+		kuantiti: payload.kuantiti,
+		kosSeunit: payload.kosSeunit,
+		jumlahNilai,
+		pihakTerlibat: payload.pihakTerlibat,
+		bahagian: payload.bahagian,
+		tujuan: payload.tujuan,
+		catatan: payload.catatan,
+		createdByName: authorization.user.nama || authorization.user.email,
+		createdByEmail: authorization.user.email,
+		status: "SAH",
+	};
+
+	if (existingTransaction && !matchesExistingTransaction(existingTransaction, result)) {
+		throw new ApiError(
+			409,
+			"IDEMPOTENCY_CONFLICT",
+			"Kunci idempotensi telah digunakan untuk permintaan lain.",
+		);
+	}
+
+	const auditRecords = rowsToRecords(auditData);
+	const existingAudit = auditRecords.find((record) => record.AUDIT_ID === auditId);
+	const auditRecord: Record<string, string | number> = {
+		AUDIT_ID: auditId,
+		TIMESTAMP: result.timestamp,
+		USER_EMAIL: authorization.user.email,
+		USER_NAME: authorization.user.nama || authorization.user.email,
+		ACTION: "CREATE",
+		MODULE: "TRANSACTION",
+		RECORD_ID: transactionId,
+		BEFORE_JSON: "",
+		AFTER_JSON: JSON.stringify(transactionRecord(result)),
+		CATATAN: `Rekod Barang Masuk ${transactionId}`,
+	};
+
+	if (!existingTransaction) {
+		await appendSheetRecord(
+			env,
+			env.TRANSACTIONS_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(transactionsData),
+			transactionRecord(result),
+		);
+	}
+
+	if (!existingAudit) {
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(auditData),
+			auditRecord,
+		);
+	}
+
+	return Response.json(
+		{
+			success: true,
+			replayed: Boolean(existingTransaction),
+			transaction: result,
+		},
+		{ status: existingTransaction ? 200 : 201 },
+	);
+}
+
 export default {
 	async fetch(request, env): Promise<Response> {
 		const origin = request.headers.get("Origin");
@@ -468,6 +826,40 @@ export default {
 					}));
 				}
 				return addCorsHeaders(errorResponse(apiError), origin);
+			}
+		}
+
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/transactions/in"
+		) {
+			try {
+				return addCorsHeaders(
+					await incomingTransactionRoute(request, env),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(
+						500,
+						"WRITE_FAILED",
+						"Transaksi tidak dapat disimpan.",
+					);
+				const safeError = apiError.status >= 500 &&
+						!["AUTH_CONFIG_ERROR", "AUTH_SERVICE_ERROR"].includes(apiError.code)
+					? new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat disimpan.")
+					: apiError;
+
+				if (safeError.status >= 500) {
+					console.error(JSON.stringify({
+						message: "incoming transaction route failed",
+						code: safeError.code,
+						path: url.pathname,
+						status: safeError.status,
+					}));
+				}
+				return addCorsHeaders(errorResponse(safeError), origin);
 			}
 		}
 
