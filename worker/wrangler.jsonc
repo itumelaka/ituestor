@@ -23,6 +23,9 @@
 "vars": {
 "APP_ENV": "production",
 "SPREADSHEET_ID": "1nihQ3IN9104uyIP3hqry6vd7jMcNpcnMfTTvPUsTpa4",
-"MASTER_ITEM_SHEET": "MASTER_ITEM"
+"MASTER_ITEM_SHEET": "MASTER_ITEM",
+"USERS_SHEET": "USERS",
+"SUPABASE_URL": "https://tzsykhjfhmctasjscwch.supabase.co",
+"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy"
 }
 }

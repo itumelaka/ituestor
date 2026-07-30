@@ -15,7 +15,11 @@ import worker from "../src/index";
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 const TEST_SERVICE_ACCOUNT_EMAIL = "worker-test@example.invalid";
 const TEST_PRIVATE_KEY_ID = "test-key-id";
-const TEST_ACCESS_TOKEN = "test-access-token";
+const TEST_GOOGLE_ACCESS_TOKEN = "test-google-access-token";
+const TEST_SUPABASE_ACCESS_TOKEN = "test-supabase-access-token";
+const TEST_SUPABASE_URL = "https://test-project.supabase.co";
+const TEST_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test_only";
+const TEST_USER_EMAIL = "itumelaka@gmail.com";
 const PRODUCTION_ORIGIN = "https://itumelaka.github.io";
 const LOCAL_ORIGIN = "http://localhost:5173";
 const DISALLOWED_ORIGIN = "https://example.com";
@@ -57,10 +61,172 @@ function createTestEnv() {
 		APP_ENV: "production",
 		SPREADSHEET_ID: "test-spreadsheet-id",
 		MASTER_ITEM_SHEET: "MASTER_ITEM",
+		USERS_SHEET: "USERS",
+		SUPABASE_URL: TEST_SUPABASE_URL,
+		SUPABASE_PUBLISHABLE_KEY: TEST_SUPABASE_PUBLISHABLE_KEY,
 		GOOGLE_SERVICE_ACCOUNT_EMAIL: TEST_SERVICE_ACCOUNT_EMAIL,
 		GOOGLE_PRIVATE_KEY_ID: TEST_PRIVATE_KEY_ID,
 		GOOGLE_PRIVATE_KEY: testPrivateKey,
 	};
+}
+
+type TestUserRecord = {
+	userId?: string;
+	nama?: string;
+	email?: string;
+	role?: string;
+	status?: string;
+};
+
+type AuthenticatedFetchOptions = {
+	verifiedEmail?: string;
+	user?: TestUserRecord | null;
+	inventoryRows?: string[][];
+	googleAuthFailure?: boolean;
+};
+
+const USERS_HEADERS = [
+	"USER_ID",
+	"NAMA",
+	"EMAIL",
+	"ROLE",
+	"STATUS",
+	"CREATED_AT",
+	"UPDATED_AT",
+];
+
+const ITEM_HEADERS = [
+	"ITEM_ID",
+	"KATEGORI",
+	"NAMA_ITEM",
+	"NAMA_ITEM_ASAL",
+	"UNIT",
+	"KOS_SEUNIT",
+	"STOK_AWAL",
+	"STOK_MINIMUM",
+	"STATUS",
+	"SUMBER_TAB",
+	"SUMBER_BARIS",
+	"CREATED_AT",
+	"UPDATED_AT",
+];
+
+function bearerHeaders(token = TEST_SUPABASE_ACCESS_TOKEN): HeadersInit {
+	return { Authorization: `Bearer ${token}` };
+}
+
+function activeUser(overrides: TestUserRecord = {}): TestUserRecord {
+	return {
+		userId: "USR-0001",
+		nama: "ITU Melaka",
+		email: TEST_USER_EMAIL,
+		role: "SUPER_ADMIN",
+		status: "AKTIF",
+		...overrides,
+	};
+}
+
+function userSheetValues(user: TestUserRecord | null): string[][] {
+	if (!user) return [USERS_HEADERS];
+
+	return [
+		USERS_HEADERS,
+		[
+			user.userId ?? "",
+			user.nama ?? "",
+			user.email ?? "",
+			user.role ?? "",
+			user.status ?? "",
+			"2026-07-29T09:00:00+08:00",
+			"2026-07-29T09:00:00+08:00",
+		],
+	];
+}
+
+function inventoryRows(count = 130): string[][] {
+	return Array.from({ length: count }, (_, index) => {
+		const itemNumber = index + 1;
+		return [
+			`AT-${String(itemNumber).padStart(4, "0")}`,
+			"ALAT TULIS",
+			index === 0 ? "Kertas A4 80gsm" : `Item Ujian ${itemNumber}`,
+			index === 0 ? "KERTAS A4 80GSM" : `ITEM UJIAN ${itemNumber}`,
+			"RIM",
+			index === 0 ? "RM 1,234.50" : "1.00",
+			index === 0 ? "12" : "1",
+			index === 0 ? "2" : "0",
+			"AKTIF",
+			"ALAT TULIS",
+			String(itemNumber + 1),
+			"2026-07-29T09:00:00+08:00",
+			"2026-07-29T09:00:00+08:00",
+		];
+	});
+}
+
+function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
+	const verifiedEmail = options.verifiedEmail ?? TEST_USER_EMAIL;
+	const user = options.user === undefined ? activeUser() : options.user;
+	const rows = options.inventoryRows ?? inventoryRows();
+
+	return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+		const url =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: input.url;
+
+		if (url === `${TEST_SUPABASE_URL}/auth/v1/user`) {
+			const headers = new Headers(init?.headers);
+			expect(headers.get("apikey")).toBe(TEST_SUPABASE_PUBLISHABLE_KEY);
+			expect(headers.get("Authorization")).toBe(
+				`Bearer ${TEST_SUPABASE_ACCESS_TOKEN}`,
+			);
+			return Response.json({
+				id: "supabase-user-id",
+				email: verifiedEmail,
+				email_confirmed_at: "2026-07-29T08:00:00.000Z",
+			});
+		}
+
+		if (url === "https://oauth2.googleapis.com/token") {
+			if (options.googleAuthFailure) {
+				return Response.json({ error: "invalid_grant" }, { status: 401 });
+			}
+			return Response.json({
+				access_token: TEST_GOOGLE_ACCESS_TOKEN,
+				token_type: "Bearer",
+				expires_in: 3600,
+			});
+		}
+
+		if (url.startsWith("https://sheets.googleapis.com/v4/spreadsheets/")) {
+			const headers = new Headers(init?.headers);
+			expect(headers.get("Authorization")).toBe(
+				`Bearer ${TEST_GOOGLE_ACCESS_TOKEN}`,
+			);
+			const decodedUrl = decodeURIComponent(url);
+
+			if (decodedUrl.includes("/values/USERS!A:Z")) {
+				return Response.json({
+					range: "USERS!A1:G2",
+					majorDimension: "ROWS",
+					values: userSheetValues(user),
+				});
+			}
+
+			if (decodedUrl.includes("/values/MASTER_ITEM!A:Z")) {
+				return Response.json({
+					range: `MASTER_ITEM!A1:M${rows.length + 1}`,
+					majorDimension: "ROWS",
+					values: [ITEM_HEADERS, ...rows],
+				});
+			}
+		}
+
+		throw new Error(`Permintaan luar tidak dijangka: ${url}`);
+	});
 }
 
 async function dispatch(
@@ -139,68 +305,91 @@ describe("ITU eSTOR Worker", () => {
 		});
 	});
 
-	it("transforms a Google Sheets row into a structured inventory item", async () => {
-		const fetchMock = vi
-			.spyOn(globalThis, "fetch")
-			.mockImplementation(async (input) => {
-				const url =
-					typeof input === "string"
-						? input
-						: input instanceof URL
-							? input.toString()
-							: input.url;
+	it("requires authentication for GET /api/me", async () => {
+		const response = await dispatch("/api/me");
+		const body = await response.json<{
+			success: boolean;
+			error: string;
+			message: string;
+		}>();
 
-				if (url === "https://oauth2.googleapis.com/token") {
-					return Response.json({
-						access_token: TEST_ACCESS_TOKEN,
-						token_type: "Bearer",
-						expires_in: 3600,
-					});
-				}
+		expect(response.status).toBe(401);
+		expect(body).toEqual({
+			success: false,
+			error: "AUTH_REQUIRED",
+			message: "Log masuk diperlukan.",
+		});
+	});
 
-				if (url.startsWith("https://sheets.googleapis.com/v4/spreadsheets/")) {
-					return Response.json({
-						range: "MASTER_ITEM!A1:M2",
-						majorDimension: "ROWS",
-						values: [
-							[
-								"ITEM_ID",
-								"KATEGORI",
-								"NAMA_ITEM",
-								"NAMA_ITEM_ASAL",
-								"UNIT",
-								"KOS_SEUNIT",
-								"STOK_AWAL",
-								"STOK_MINIMUM",
-								"STATUS",
-								"SUMBER_TAB",
-								"SUMBER_BARIS",
-								"CREATED_AT",
-								"UPDATED_AT",
-							],
-							[
-								"AT-0001",
-								"ALAT TULIS",
-								"Kertas A4 80gsm",
-								"KERTAS A4 80GSM",
-								"RIM",
-								"RM 1,234.50",
-								"12",
-								"2",
-								"AKTIF",
-								"ALAT TULIS",
-								"5",
-								"2026-07-29T09:00:00+08:00",
-								"2026-07-29T09:00:00+08:00",
-							],
-						],
-					});
-				}
-
-				throw new Error(`Permintaan luar tidak dijangka: ${url}`);
-			});
-
+	it("requires authentication for GET /api/items", async () => {
 		const response = await dispatch("/api/items");
+		const body = await response.json<{
+			success: boolean;
+			error: string;
+			message: string;
+		}>();
+
+		expect(response.status).toBe(401);
+		expect(body).toEqual({
+			success: false,
+			error: "AUTH_REQUIRED",
+			message: "Log masuk diperlukan.",
+		});
+	});
+
+	it("rejects an invalid Supabase bearer token", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			Response.json({ message: "Invalid JWT" }, { status: 401 }),
+		);
+
+		const response = await dispatch(
+			"/api/me",
+			"GET",
+			bearerHeaders("invalid-test-token"),
+		);
+		const body = await response.json<{
+			success: boolean;
+			error: string;
+			message: string;
+		}>();
+
+		expect(response.status).toBe(401);
+		expect(body.error).toBe("INVALID_TOKEN");
+		expect(body.message).toBe("Sesi tidak sah atau telah tamat.");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const supabaseCall = fetchMock.mock.calls[0];
+		const headers = new Headers(supabaseCall?.[1]?.headers);
+		expect(headers.get("Authorization")).toBe("Bearer invalid-test-token");
+	});
+
+	it("allows an authorized active user to access GET /api/me", async () => {
+		const fetchMock = mockAuthenticatedFetch();
+
+		const response = await dispatch("/api/me", "GET", bearerHeaders());
+		const body = await response.json<{
+			success: boolean;
+			user: Record<string, string>;
+		}>();
+
+		expect(response.status).toBe(200);
+		expect(body).toEqual({
+			success: true,
+			user: {
+				userId: "USR-0001",
+				nama: "ITU Melaka",
+				email: TEST_USER_EMAIL,
+				role: "SUPER_ADMIN",
+				status: "AKTIF",
+			},
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("allows an authorized active user to access 130 inventory items", async () => {
+		const fetchMock = mockAuthenticatedFetch();
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
 		const body = await response.json<{
 			success: boolean;
 			sheet: string;
@@ -211,47 +400,68 @@ describe("ITU eSTOR Worker", () => {
 		expect(response.status).toBe(200);
 		expect(body.success).toBe(true);
 		expect(body.sheet).toBe("MASTER_ITEM");
-		expect(body.count).toBe(1);
-		expect(body.items).toEqual([
-			{
-				itemId: "AT-0001",
-				kategori: "ALAT TULIS",
-				namaItem: "Kertas A4 80gsm",
-				namaItemAsal: "KERTAS A4 80GSM",
-				unit: "RIM",
-				kosSeunit: 1234.5,
-				stokAwal: 12,
-				stokMinimum: 2,
-				status: "AKTIF",
-				sumberTab: "ALAT TULIS",
-				sumberBaris: 5,
-				createdAt: "2026-07-29T09:00:00+08:00",
-				updatedAt: "2026-07-29T09:00:00+08:00",
-			},
-		]);
+		expect(body.count).toBe(130);
+		expect(body.items).toHaveLength(130);
+		expect(body.items[0]).toEqual({
+			itemId: "AT-0001",
+			kategori: "ALAT TULIS",
+			namaItem: "Kertas A4 80gsm",
+			namaItemAsal: "KERTAS A4 80GSM",
+			unit: "RIM",
+			kosSeunit: 1234.5,
+			stokAwal: 12,
+			stokMinimum: 2,
+			status: "AKTIF",
+			sumberTab: "ALAT TULIS",
+			sumberBaris: 2,
+			createdAt: "2026-07-29T09:00:00+08:00",
+			updatedAt: "2026-07-29T09:00:00+08:00",
+		});
 		expect(typeof body.items[0]?.kosSeunit).toBe("number");
 		expect(typeof body.items[0]?.stokAwal).toBe("number");
 		expect(typeof body.items[0]?.stokMinimum).toBe("number");
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-
-		const sheetsCall = fetchMock.mock.calls[1];
-		const sheetsInit = sheetsCall?.[1];
-		const headers = new Headers(sheetsInit?.headers);
-		expect(headers.get("Authorization")).toBe(`Bearer ${TEST_ACCESS_TOKEN}`);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 
-	it("returns a structured error without exposing test secrets when Google OAuth fails", async () => {
-		vi.spyOn(console, "error").mockImplementation(() => undefined);
-		const fetchMock = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(
-				Response.json(
-					{ error: "invalid_grant" },
-					{ status: 401 },
-				),
-			);
+	it("rejects an inactive registered user", async () => {
+		mockAuthenticatedFetch({
+			user: activeUser({ status: "TIDAK_AKTIF" }),
+		});
 
-		const response = await dispatch("/api/items");
+		const response = await dispatch("/api/me", "GET", bearerHeaders());
+		const body = await response.json<{ error: string }>();
+
+		expect(response.status).toBe(403);
+		expect(body.error).toBe("USER_INACTIVE");
+	});
+
+	it("rejects an unregistered user", async () => {
+		mockAuthenticatedFetch({ user: null });
+
+		const response = await dispatch("/api/me", "GET", bearerHeaders());
+		const body = await response.json<{ error: string }>();
+
+		expect(response.status).toBe(403);
+		expect(body.error).toBe("USER_NOT_REGISTERED");
+	});
+
+	it("rejects a registered user with an invalid role", async () => {
+		mockAuthenticatedFetch({
+			user: activeUser({ role: "ROLE_UJIAN_TIDAK_SAH" }),
+		});
+
+		const response = await dispatch("/api/me", "GET", bearerHeaders());
+		const body = await response.json<{ error: string }>();
+
+		expect(response.status).toBe(403);
+		expect(body.error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("returns a safe structured error when Google OAuth fails", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const fetchMock = mockAuthenticatedFetch({ googleAuthFailure: true });
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
 		const body = await response.json<{
 			success: boolean;
 			error: string;
@@ -260,13 +470,16 @@ describe("ITU eSTOR Worker", () => {
 		const serializedBody = JSON.stringify(body);
 
 		expect(response.status).toBe(500);
-		expect(body.success).toBe(false);
-		expect(body.error).toBe("GOOGLE_SHEETS_ERROR");
-		expect(body.message).toContain("Google OAuth gagal: 401");
+		expect(body).toEqual({
+			success: false,
+			error: "GOOGLE_AUTH_ERROR",
+			message: "Perkhidmatan data tidak dapat disahkan.",
+		});
 		expect(serializedBody).not.toContain(TEST_PRIVATE_KEY_ID);
 		expect(serializedBody).not.toContain(TEST_SERVICE_ACCOUNT_EMAIL);
 		expect(serializedBody).not.toContain(testPrivateKey);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(serializedBody).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("returns structured NOT_FOUND for an unsupported HTTP method", async () => {

@@ -6,7 +6,11 @@ const drawerBackdrop = document.getElementById("drawerBackdrop");
 const navLinks = document.querySelectorAll(".nav-link");
 const searchInput = document.getElementById("dashboardSearch");
 const searchBox = searchInput.closest(".search");
-const API_URL = "https://ituestor-api.itumelaka.workers.dev/api/items";
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+const API_BASE_URL = LOCAL_HOSTS.has(window.location.hostname)
+  ? `${window.location.protocol}//${window.location.hostname}:8787`
+  : "https://ituestor-api.itumelaka.workers.dev";
+const API_URL = `${API_BASE_URL}/api/items`;
 const SUPABASE_URL = "https://tzsykhjfhmctasjscwch.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy";
 const chartColors = ["#2777c7", "#51a83c", "#ffc313", "#ed4938", "#8a62b8", "#40a5af"];
@@ -17,6 +21,10 @@ let lastFocusedItem = null;
 let inventoryRequest = null;
 let inventoryLoaded = false;
 let supabaseClient = null;
+let accessRequest = null;
+let accessGranted = false;
+let currentSession = null;
+let authRetryMode = "auth";
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -409,22 +417,36 @@ function userInitials(name, email) {
 }
 
 function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
+  currentSession = null;
+  accessGranted = false;
+  accessRequest = null;
+  inventoryRequest = null;
+  inventoryLoaded = false;
+  loadedItems = [];
+  authRetryMode = "auth";
   document.body.className = "auth-signed-out";
   elements.userProfile.hidden = true;
   elements.googleLogin.disabled = false;
+  elements.googleLogin.hidden = false;
+  elements.googleLogin.textContent = "Log masuk dengan Google";
+  elements.authRetry.textContent = "Cuba lagi";
   setAuthState("signed-out", message);
 }
 
-function showSignedIn(session) {
-  const user = session?.user;
-  if (!user) {
-    showSignedOut();
-    return;
-  }
+function googleProfile(session) {
+  const user = session?.user || {};
   const metadata = user.user_metadata || {};
-  const name = metadata.full_name || metadata.name || metadata.user_name || "Pengguna Google";
-  const email = user.email || "E-mel tidak tersedia";
-  const avatarUrl = metadata.avatar_url || metadata.picture || "";
+  return {
+    avatarUrl: metadata.avatar_url || metadata.picture || "",
+    email: user.email || "E-mel tidak tersedia"
+  };
+}
+
+function showAuthorizedUser(session, applicationUser) {
+  const profile = googleProfile(session);
+  const name = applicationUser.nama || applicationUser.email;
+  const email = applicationUser.email;
+  const avatarUrl = profile.avatarUrl;
   elements.userName.textContent = name;
   elements.userEmail.textContent = email;
   elements.userAvatarFallback.textContent = userInitials(name, email);
@@ -432,10 +454,88 @@ function showSignedIn(session) {
   elements.userAvatarImage.hidden = !avatarUrl;
   elements.userAvatarImage.src = avatarUrl;
   elements.userAvatarImage.alt = avatarUrl ? `Foto profil ${name}` : "";
+  const roleLabel = elements.userProfile.querySelector("small");
+  if (roleLabel) roleLabel.textContent = applicationUser.role;
   elements.userProfile.hidden = false;
+  accessGranted = true;
   document.body.className = "auth-signed-in";
   cleanOAuthUrl();
-  ensureInventoryData();
+}
+
+function accessErrorMessage(status, code) {
+  if (status === 401 || code === "AUTH_REQUIRED" || code === "INVALID_TOKEN") {
+    return "Sesi anda telah tamat atau tidak sah. Log keluar dan masuk semula.";
+  }
+  const messages = {
+    EMAIL_REQUIRED: "Akaun Google ini tidak mempunyai e-mel yang boleh disahkan.",
+    USER_NOT_REGISTERED: "E-mel anda belum didaftarkan untuk mengakses ITU eSTOR.",
+    USER_INACTIVE: "Akses pengguna anda tidak aktif.",
+    ROLE_NOT_ALLOWED: "Peranan pengguna anda tidak dibenarkan."
+  };
+  return messages[code] || "Akses kepada ITU eSTOR ditolak.";
+}
+
+function showAccessGate(message, mode) {
+  accessGranted = false;
+  authRetryMode = mode;
+  document.body.className = "auth-pending";
+  elements.userProfile.hidden = true;
+  setAuthState("error", message);
+  elements.googleLogin.hidden = true;
+  elements.authRetry.hidden = false;
+  elements.authRetry.textContent = mode === "logout" ? "Log keluar" : "Cuba lagi";
+}
+
+async function checkApplicationAccess(session) {
+  if (!session?.access_token) {
+    showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+    return;
+  }
+  if (accessGranted || accessRequest) return accessRequest;
+
+  currentSession = session;
+  document.body.className = "auth-pending";
+  elements.userProfile.hidden = true;
+  setAuthState("loading", "Menyemak akses aplikasiâ€¦");
+
+  accessRequest = (async () => {
+    let response;
+    try {
+      response = await fetch(`${API_BASE_URL}/api/me`, {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${session.access_token}`
+        }
+      });
+    } catch {
+      showAccessGate("Perkhidmatan akses tidak dapat dihubungi. Sila cuba lagi.", "access");
+      return;
+    }
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      showAccessGate("Respons pengesahan akses tidak sah. Sila cuba lagi.", "access");
+      return;
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      showAccessGate(accessErrorMessage(response.status, data.error), "logout");
+      return;
+    }
+    if (!response.ok || data.success !== true || !data.user) {
+      showAccessGate("Perkhidmatan akses tidak tersedia buat masa ini. Sila cuba lagi.", "access");
+      return;
+    }
+
+    showAuthorizedUser(session, data.user);
+    ensureInventoryData(session.access_token);
+  })().finally(() => {
+    accessRequest = null;
+  });
+
+  return accessRequest;
 }
 
 async function signInWithGoogle() {
@@ -493,14 +593,14 @@ async function initializeAuth() {
       }
     });
     supabaseClient.auth.onAuthStateChange((_event, session) => {
-      if (session) showSignedIn(session);
+      if (session) checkApplicationAccess(session);
       else showSignedOut();
     });
   }
   try {
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
-    if (data.session) showSignedIn(data.session);
+    if (data.session) checkApplicationAccess(data.session);
     else {
       const oauthError = new URLSearchParams(window.location.search).has("error") ||
         /(?:^#|&)error=/.test(window.location.hash);
@@ -518,18 +618,35 @@ async function initializeAuth() {
   }
 }
 
-function ensureInventoryData() {
+function ensureInventoryData(accessToken) {
+  if (!accessGranted || !accessToken) return null;
   if (inventoryLoaded || inventoryRequest) return inventoryRequest;
-  inventoryRequest = loadDashboardData().finally(() => {
+  inventoryRequest = loadDashboardData(accessToken).finally(() => {
     inventoryRequest = null;
   });
   return inventoryRequest;
 }
 
-async function loadDashboardData() {
+async function loadDashboardData(accessToken) {
+  if (!accessGranted || !accessToken) return;
   setDataState("loading", "Memuatkan data stok sebenar…");
   try {
-    const response = await fetch(API_URL, { headers: { Accept: "application/json" } });
+    const response = await fetch(API_URL, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    if (response.status === 401 || response.status === 403) {
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {
+        // Gunakan mesej selamat lalai.
+      }
+      showAccessGate(accessErrorMessage(response.status, data.error), "logout");
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (data.success !== true || !Array.isArray(data.items)) throw new Error("Respons API tidak sah");
@@ -548,6 +665,16 @@ async function loadDashboardData() {
     setDataState("error", "Data stok tidak dapat dimuatkan buat masa ini.");
     setRegisterState("error", "Daftar item tidak dapat dimuatkan buat masa ini.");
   }
+}
+
+async function retryInventoryData() {
+  if (!supabaseClient || !accessGranted) return;
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) {
+    showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+    return;
+  }
+  ensureInventoryData(data.session.access_token);
 }
 
 function toggleSidebar(open) {
@@ -595,8 +722,8 @@ searchInput.addEventListener("input", () => {
   if (loadedItems.length) renderStockAlerts(filterItems());
 });
 
-elements.retryData.addEventListener("click", loadDashboardData);
-elements.registerRetry.addEventListener("click", loadDashboardData);
+elements.retryData.addEventListener("click", retryInventoryData);
+elements.registerRetry.addEventListener("click", retryInventoryData);
 [
   elements.itemSearch, elements.categoryFilter, elements.stockFilter,
   elements.apiStatusFilter, elements.itemSort
@@ -638,8 +765,15 @@ elements.itemModal.addEventListener("click", (event) => {
 elements.googleLogin.addEventListener("click", signInWithGoogle);
 elements.logoutButton.addEventListener("click", signOut);
 elements.authRetry.addEventListener("click", () => {
-  if (!window.supabase) window.location.reload();
-  else initializeAuth();
+  if (authRetryMode === "logout") {
+    signOut();
+  } else if (authRetryMode === "access" && currentSession) {
+    checkApplicationAccess(currentSession);
+  } else if (!window.supabase) {
+    window.location.reload();
+  } else {
+    initializeAuth();
+  }
 });
 elements.userAvatarImage.addEventListener("error", () => {
   elements.userAvatarImage.hidden = true;
