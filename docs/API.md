@@ -1,8 +1,8 @@
 # API ITU eSTOR
 
-## Status
+## Status produksi
 
-API pengeluaran ITU eSTOR kini **baca sahaja**. Hanya dua endpoint `GET` aktif. Frontend telah menggunakan Supabase Google Auth, tetapi Worker belum mengesahkan token atau menguatkuasakan pengguna dan peranan.
+API produksi ITU eSTOR ialah API baca sahaja yang dilindungi oleh Supabase Auth dan rekod kebenaran dalam Google Sheets `USERS`.
 
 **Base URL**
 
@@ -10,18 +10,43 @@ API pengeluaran ITU eSTOR kini **baca sahaja**. Hanya dua endpoint `GET` aktif. 
 https://ituestor-api.itumelaka.workers.dev
 ```
 
-## `GET /health`
+**Version ID produksi — 30 Julai 2026**
 
-Mengembalikan status asas Worker. Endpoint ini tidak membaca Google Sheets.
-
-### Permintaan
-
-```http
-GET /health HTTP/1.1
-Host: ituestor-api.itumelaka.workers.dev
+```text
+e369d89f-6be3-46a0-a312-7a145aeb602f
 ```
 
-### Respons berjaya
+## Pengesahan dan kebenaran
+
+Endpoint dilindungi memerlukan header:
+
+```http
+Authorization: Bearer <Supabase access token>
+```
+
+Aliran server:
+
+1. Worker menghantar token ke endpoint rasmi Supabase `/auth/v1/user`.
+2. Worker hanya menggunakan identiti yang berjaya disahkan.
+3. E-mel pengguna ditrim dan ditukar kepada huruf kecil.
+4. Worker membaca `USERS!A:Z` melalui aliran akaun perkhidmatan Google sedia ada.
+5. Baris `USERS` dipetakan menggunakan nama header, bukan kedudukan lajur.
+6. Akses diberikan hanya jika e-mel sepadan tepat, `STATUS = AKTIF`, dan `ROLE` dibenarkan.
+
+Peranan yang dibenarkan membaca endpoint semasa:
+
+- `SUPER_ADMIN`
+- `ADMIN_STOR`
+- `PEMBANTU_STOR`
+- `VIEWER`
+
+Token atau metadata profil Google tidak memberikan peranan secara automatik.
+
+## `GET /health`
+
+Endpoint awam untuk status asas Worker. Ia tidak memerlukan token dan tidak membaca Google Sheets.
+
+### Respons produksi disahkan
 
 Status: `200 OK`
 
@@ -30,30 +55,58 @@ Status: `200 OK`
   "service": "ITU eSTOR API",
   "status": "running",
   "environment": "production",
-  "timestamp": "2026-07-29T06:30:00.000Z"
+  "timestamp": "<ISO 8601 UTC>"
 }
 ```
 
-`timestamp` dijana semasa permintaan dan menggunakan format ISO 8601 UTC.
+## `GET /api/me`
 
-## `GET /api/items`
-
-Mengesahkan akaun perkhidmatan Google, membaca julat `MASTER_ITEM!A:Z`, dan menukar setiap baris kepada objek inventori berstruktur.
-
-Endpoint ini digunakan oleh frontend pengeluaran di <https://itumelaka.github.io/ituestor/>. CORS untuk origin `https://itumelaka.github.io` telah disahkan pada 29 Julai 2026.
+Endpoint dilindungi yang mengembalikan identiti aplikasi selepas token Supabase dan rekod `USERS` berjaya disahkan. Frontend memanggil endpoint ini sebelum memuatkan inventori.
 
 ### Permintaan
 
 ```http
-GET /api/items HTTP/1.1
+GET /api/me HTTP/1.1
 Host: ituestor-api.itumelaka.workers.dev
+Authorization: Bearer <Supabase access token>
 ```
 
 ### Respons berjaya
 
 Status: `200 OK`
 
-Contoh ini menunjukkan satu item sahaja. Respons pengeluaran yang disahkan mengandungi `count: 130` dan 130 objek dalam `items`.
+```json
+{
+  "success": true,
+  "user": {
+    "userId": "<ID pengguna>",
+    "nama": "ITU Melaka",
+    "email": "itumelaka@gmail.com",
+    "role": "SUPER_ADMIN",
+    "status": "AKTIF"
+  }
+}
+```
+
+Respons ini digunakan untuk nama paparan rasmi dan peranan aplikasi. Ia tidak mengembalikan token atau rahsia.
+
+## `GET /api/items`
+
+Endpoint dilindungi yang membaca `MASTER_ITEM!A:Z` selepas kebenaran pengguna berjaya. Semua empat peranan sah boleh membaca item.
+
+### Permintaan
+
+```http
+GET /api/items HTTP/1.1
+Host: ituestor-api.itumelaka.workers.dev
+Authorization: Bearer <Supabase access token>
+```
+
+### Respons berjaya
+
+Status: `200 OK`
+
+Respons produksi disahkan mengandungi `count: 130` dan 130 objek dalam `items`.
 
 ```json
 {
@@ -62,25 +115,25 @@ Contoh ini menunjukkan satu item sahaja. Respons pengeluaran yang disahkan menga
   "count": 130,
   "items": [
     {
-      "itemId": "AT-0001",
-      "kategori": "ALAT TULIS",
-      "namaItem": "Contoh Item",
-      "namaItemAsal": "CONTOH ITEM",
-      "unit": "UNIT",
-      "kosSeunit": 1.5,
-      "stokAwal": 2,
+      "itemId": "<ITEM_ID>",
+      "kategori": "<KATEGORI>",
+      "namaItem": "<NAMA_ITEM>",
+      "namaItemAsal": "<NAMA_ITEM_ASAL>",
+      "unit": "<UNIT>",
+      "kosSeunit": 0,
+      "stokAwal": 0,
       "stokMinimum": 0,
       "status": "AKTIF",
-      "sumberTab": "ALAT TULIS",
-      "sumberBaris": 2,
-      "createdAt": "2026-07-29T00:00:00+08:00",
-      "updatedAt": "2026-07-29T00:00:00+08:00"
+      "sumberTab": "<SUMBER_TAB>",
+      "sumberBaris": 0,
+      "createdAt": "<CREATED_AT>",
+      "updatedAt": "<UPDATED_AT>"
     }
   ]
 }
 ```
 
-Item contoh di atas menerangkan bentuk respons sahaja dan bukan dakwaan bahawa nilai contoh tersebut ialah rekod tertentu dalam spreadsheet.
+Nilai contoh menerangkan bentuk respons sahaja dan bukan rekod inventori tertentu.
 
 ### Jenis medan item
 
@@ -93,69 +146,73 @@ Item contoh di atas menerangkan bentuk respons sahaja dan bukan dakwaan bahawa n
 | `unit` | string | Unit atau kemasan |
 | `kosSeunit` | number | Nilai RM tanpa simbol mata wang |
 | `stokAwal` | number | Kuantiti awal migrasi |
-| `stokMinimum` | number | Paras amaran; migrasi awal menggunakan 0 |
-| `status` | string | Status item |
+| `stokMinimum` | number | Paras amaran |
+| `status` | string | Status rekod item |
 | `sumberTab` | string | Tab legasi asal |
 | `sumberBaris` | number | Nombor baris fizikal sumber |
-| `createdAt` | string | Timestamp migrasi/penciptaan |
-| `updatedAt` | string | Timestamp kemas kini |
+| `createdAt` | string | Cap masa penciptaan |
+| `updatedAt` | string | Cap masa kemas kini |
 
-## Root `/` dan laluan tidak dikenali
+## Respons ralat pengesahan
 
-Root tidak menyediakan laman atau metadata API. Ia mengembalikan `NOT_FOUND` secara reka bentuk.
+### Token tiada
 
-### Respons
+Respons produksi disahkan untuk `/api/me` dan `/api/items`:
 
-Status: `404 Not Found`
-
-```json
-{
-  "error": "NOT_FOUND",
-  "message": "Endpoint tidak ditemui."
-}
-```
-
-Respons yang sama digunakan untuk kaedah atau laluan yang tidak sepadan dengan endpoint aktif.
-
-## Ralat Google Sheets
-
-Jika pengesahan Google atau bacaan spreadsheet gagal, `/api/items` mengembalikan:
-
-Status: `500 Internal Server Error`
+Status: `401 Unauthorized`
 
 ```json
 {
   "success": false,
-  "error": "GOOGLE_SHEETS_ERROR",
-  "message": "Gagal membaca Google Sheet."
+  "error": "AUTH_REQUIRED",
+  "message": "Log masuk diperlukan."
 }
 ```
 
-Medan `message` semasa boleh mengandungi butiran ralat dalaman yang dijana oleh Worker. Sebelum API dibuka lebih luas, respons pengeluaran disyorkan menggunakan mesej umum sahaja dan menyimpan butiran diagnostik dalam log Worker.
+### Token tidak sah atau tamat
 
-## Keselamatan dan batasan
+Status: `401 Unauthorized`
 
-- Endpoint `/api/items` belum memerlukan token atau sesi pengguna.
-- Supabase Google Auth mengesahkan identiti pada frontend sahaja.
-- Frontend belum menghantar bearer token Supabase kepada Worker.
-- Worker belum mengesahkan token, membaca e-mel pengguna atau menyemaknya terhadap `USERS`.
-- Kawalan akses berasaskan peranan belum aktif.
-- API hanya membaca `MASTER_ITEM`; lima tab pengeluaran lain belum didedahkan.
-- Tiada endpoint `POST`, `PUT`, `PATCH` atau `DELETE`.
-- Tiada transaksi, permohonan, kelulusan atau perubahan stok boleh dilakukan melalui API.
-- Akaun perkhidmatan Google menggunakan skop baca sahaja dan akses Viewer.
-- Frontend GitHub Pages memanggil endpoint ini untuk statistik, carta kategori, status stok dan carian item.
-- Nilai stok yang dipaparkan masih dikira daripada `stokAwal × kosSeunit`; lejar transaksi belum aktif.
-- Modul permohonan dan transaksi dipaparkan sebagai `Belum aktif`.
+```json
+{
+  "success": false,
+  "error": "INVALID_TOKEN",
+  "message": "Sesi tidak sah atau telah tamat."
+}
+```
 
-## Milestone keselamatan API seterusnya
+### Kebenaran pengguna ditolak
 
-Sebelum mana-mana endpoint tulis diwujudkan:
+| Status | Kod | Keadaan |
+|---:|---|---|
+| `403` | `EMAIL_REQUIRED` | Identiti yang disahkan tiada e-mel yang boleh digunakan |
+| `403` | `USER_NOT_REGISTERED` | E-mel tiada dalam `USERS` |
+| `403` | `USER_INACTIVE` | `STATUS` bukan `AKTIF` |
+| `403` | `ROLE_NOT_ALLOWED` | `ROLE` bukan salah satu peranan yang dibenarkan |
 
-1. frontend menghantar token akses Supabase sebagai bearer token;
-2. Worker mengesahkan token dengan Supabase;
-3. Worker mengambil e-mel daripada identiti yang telah disahkan;
-4. Worker menyemak e-mel, status aktif dan peranan dalam tab `USERS`;
-5. permintaan pengguna tidak tersenarai, tidak aktif atau tidak dibenarkan ditolak.
+Respons tidak mendedahkan token, respons mentah pembekal atau stack trace.
 
-Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain tidak boleh diaktifkan sebelum aliran ini lengkap serta diuji. Jangan hantar rahsia akaun perkhidmatan, kunci peribadi atau kandungan `.dev.vars` melalui mana-mana permintaan frontend.
+## CORS
+
+Origin frontend produksi `https://itumelaka.github.io` dibenarkan. Kaedah semasa ialah `GET` dan `OPTIONS`, dan `Access-Control-Allow-Headers` merangkumi `Authorization`.
+
+## Ujian Worker
+
+Pada 30 Julai 2026, **19 daripada 19** ujian lulus. Liputan merangkumi:
+
+- health awam;
+- token tiada dan token tidak sah;
+- akses sah ke `/api/me` dan `/api/items`;
+- pengguna tidak aktif;
+- pengguna tidak berdaftar;
+- peranan tidak sah;
+- transformasi 130 item;
+- CORS dan respons ralat selamat.
+
+Semua panggilan Supabase dan Google Sheets dalam ujian menggunakan mock; tiada token sebenar atau rangkaian produksi digunakan.
+
+## Laluan lain dan batasan
+
+Laluan atau kaedah yang tidak disokong mengembalikan `404 NOT_FOUND`.
+
+Tiada endpoint `POST`, `PUT`, `PATCH` atau `DELETE`. Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log, pengurusan pengguna dan operasi tulis belum tersedia. Nilai stok dashboard masih berdasarkan `STOK_AWAL × KOS_SEUNIT`; pengiraan daripada `TRANSACTIONS` belum aktif.

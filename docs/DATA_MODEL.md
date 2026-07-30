@@ -20,9 +20,9 @@ Enam tab pengeluaran kini telah diwujudkan dalam spreadsheet yang sama:
 - `AUDIT_LOG`
 - `SETTINGS`
 
-Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. Pada masa ini, hanya `MASTER_ITEM` didedahkan melalui Cloudflare Worker pengeluaran menggunakan endpoint baca sahaja `GET /api/items`, dan frontend GitHub Pages telah menggunakan endpoint tersebut sejak 29 Julai 2026. Lima tab pengeluaran lain belum didedahkan melalui API.
+Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. `MASTER_ITEM` didedahkan melalui endpoint baca sahaja yang dilindungi, `GET /api/items`. `USERS` dibaca secara dalaman oleh Worker untuk kebenaran dan tidak didedahkan sebagai senarai pengguna. Tab pengeluaran lain belum mempunyai endpoint fungsi.
 
-GitHub Pages tidak boleh membaca atau mengubah Google Sheet secara terus. Supabase Google Auth telah mengesahkan identiti pengguna pada frontend sejak 29 Julai 2026, tetapi Worker belum mengesahkan token atau memadankan e-mel dengan status dan peranan dalam `USERS`. Penguatkuasaan peranan, operasi tulis dan pengiraan stok berasaskan transaksi masih belum dilaksanakan.
+GitHub Pages tidak membaca atau mengubah Google Sheet secara terus. Sejak 30 Julai 2026, Worker produksi mengesahkan token Supabase, menormalkan e-mel, dan memadankannya dengan `EMAIL`, `STATUS` serta `ROLE` dalam `USERS`. Hanya pengguna `AKTIF` dengan peranan `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR` atau `VIEWER` boleh membaca `/api/me` dan `/api/items`. Operasi tulis dan pengiraan stok berasaskan transaksi masih belum dilaksanakan.
 
 Semua cap masa menggunakan zon `Asia/Kuala_Lumpur`, mata wang ialah Ringgit Malaysia (RM), dan alamat e-mel disimpan dalam huruf kecil.
 
@@ -181,7 +181,10 @@ STATUS: AKTIF
 
 - Pengesahan Google melalui Supabase tidak secara automatik memberi akses aplikasi.
 - Nama, e-mel dan imej profil daripada Google ialah identiti, bukan bukti peranan aplikasi.
-- E-mel mesti wujud dalam `USERS` dan berstatus `AKTIF`.
+- Worker mengesahkan token melalui Supabase sebelum membaca rekod `USERS`.
+- E-mel yang telah disahkan dinormalkan dengan `trim()` dan huruf kecil sebelum padanan tepat.
+- E-mel mesti wujud dalam `USERS`, berstatus `AKTIF`, dan mempunyai salah satu peranan yang dibenarkan.
+- Pengguna tidak berdaftar, tidak aktif atau mempunyai peranan tidak sah ditolak sebelum data inventori dibaca.
 - Hanya `SUPER_ADMIN` boleh mengubah peranan dan tetapan kritikal.
 - E-mel pengguna dirujuk oleh transaksi, permohonan, audit dan tetapan.
 
@@ -314,7 +317,7 @@ Menyimpan konfigurasi ringkas aplikasi dalam bentuk pasangan kunci-nilai.
 | Urus pengguna/peranan | Ya | Tidak | Tidak | Tidak |
 | Ubah tetapan kritikal | Ya | Tidak | Tidak | Tidak |
 
-Matriks akhir perlu dikuatkuasakan dalam Cloudflare Worker dan diuji untuk setiap endpoint.
+Kebenaran baca bagi semua empat peranan telah dikuatkuasakan. Baris operasi tulis dalam matriks ini ialah reka bentuk sasaran dan mesti dikuatkuasakan serta diuji apabila endpoint berkaitan dibina.
 
 ### Larangan suntingan stok terus
 
@@ -336,24 +339,27 @@ Audit diwajibkan untuk:
 
 ## 11. Status pelaksanaan dan urutan seterusnya
 
-Selesai dan disahkan:
+Selesai dan disahkan pada 30 Julai 2026:
 
 1. Empat tab legasi dikekalkan tanpa perubahan.
 2. Enam tab pengeluaran telah diwujudkan.
 3. `MASTER_ITEM` telah dimigrasikan dan direkonsiliasi kepada 130 item.
-4. Cloudflare Worker pengeluaran membaca semua 130 item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
-5. Frontend pengeluaran memaparkan data langsung `MASTER_ITEM`; nilai stok diketahui masih berdasarkan `STOK_AWAL` sehingga lejar transaksi diaktifkan.
-6. Supabase Google Auth mengunci frontend tanpa sesi dan memulihkan sesi pengguna, tetapi UI kekal pada `Pengesahan akses belum selesai`.
+4. Cloudflare Worker membaca semua item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
+5. Supabase Google Auth mengunci frontend tanpa sesi dan memulihkan sesi pengguna.
+6. Frontend menghantar bearer token kepada Worker.
+7. Worker mengesahkan token melalui Supabase dan menyemak e-mel, `STATUS = AKTIF` serta peranan dalam `USERS`.
+8. `/api/me` dan `/api/items` dilindungi; pengguna tidak berdaftar, tidak aktif atau mempunyai peranan tidak sah ditolak.
+9. Pengguna produksi `itumelaka@gmail.com` disahkan sebagai `ITU Melaka`, `SUPER_ADMIN`, `AKTIF`.
+10. Nilai stok diketahui masih berdasarkan `STOK_AWAL` sehingga lejar transaksi diaktifkan.
 
 Kerja seterusnya:
 
-1. Hantar bearer token Supabase daripada frontend dan sahkannya pada Worker.
-2. Baca e-mel yang disahkan, kemudian semak pengguna aktif serta peranan dalam `USERS`.
-3. Tolak pengguna tidak tersenarai, tidak aktif atau tidak dibenarkan.
-4. Kuatkuasakan akses berasaskan peranan.
-5. Laksanakan endpoint transaksi serta pengiraan stok semasa.
-6. Laksanakan aliran `REQUESTS`, audit dan operasi tetapan.
-7. Hadkan semua operasi tulis kepada Cloudflare Worker.
-8. Aktifkan operasi tulis hanya selepas validasi, ujian akses dan audit keselamatan selesai.
+1. Laksanakan endpoint `TRANSACTIONS` serta pengiraan stok semasa.
+2. Laksanakan Barang Masuk dan Barang Keluar.
+3. Laksanakan aliran `REQUESTS`, kelulusan dan penyerahan.
+4. Laksanakan `AUDIT_LOG`, pengurusan pengguna dan operasi tetapan.
+5. Takrif dan uji kebenaran khusus bagi setiap operasi tulis.
+6. Hadkan semua operasi tulis kepada Cloudflare Worker.
+7. Aktifkan operasi tulis hanya selepas validasi data, audit dan ujian keselamatan selesai.
 
-Barang Masuk, Barang Keluar, permohonan, kelulusan dan operasi tulis lain mesti menunggu sehingga langkah kebenaran backend 1–4 lengkap dan diuji.
+Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log dan pengurusan pengguna belum aktif.
