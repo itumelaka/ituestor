@@ -782,3 +782,10 @@ elements.userAvatarImage.addEventListener("error", () => {
 window.addEventListener("hashchange", () => showView(window.location.hash));
 showView(window.location.hash);
 initializeAuth();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js", { scope: "./" })
+      .catch(() => console.warn("Sokongan luar talian tidak dapat dimulakan."));
+  });
+}
