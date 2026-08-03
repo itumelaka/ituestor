@@ -93,6 +93,8 @@ type AuthenticatedFetchOptions = {
 	failItemAppend?: boolean;
 	failItemAppendOnce?: boolean;
 	itemHeaders?: string[];
+	transactionHeaders?: string[];
+	failTransactionRead?: boolean;
 };
 
 const USERS_HEADERS = [
@@ -195,6 +197,7 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 		))
 		: sourceRows;
 	const transactions = options.transactionRows ?? [];
+	const transactionHeaders = options.transactionHeaders ?? TRANSACTION_HEADERS;
 	const audits = options.auditRows ?? [];
 	let auditAppendFailuresRemaining = options.failAuditAppendOnce ? 1 : 0;
 	let itemAppendFailuresRemaining = options.failItemAppendOnce ? 1 : 0;
@@ -284,10 +287,13 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 			}
 
 			if (decodedUrl.includes("/values/TRANSACTIONS!A:Z")) {
+				if (options.failTransactionRead) {
+					return Response.json({ error: "read failed" }, { status: 500 });
+				}
 				return Response.json({
 					range: `TRANSACTIONS!A1:N${transactions.length + 1}`,
 					majorDimension: "ROWS",
-					values: [TRANSACTION_HEADERS, ...transactions],
+					values: [transactionHeaders, ...transactions],
 				});
 			}
 
@@ -355,6 +361,27 @@ function createItemBody(overrides: Record<string, unknown> = {}): string {
 		stokMinimum: 3,
 		...overrides,
 	});
+}
+
+function transactionRow(overrides: Record<string, string | number> = {}): string[] {
+	const record: Record<string, string | number> = {
+		TRANSACTION_ID: crypto.randomUUID(),
+		TIMESTAMP: "2026-08-03T10:00:00+08:00",
+		ITEM_ID: "AT-0001",
+		JENIS: "MASUK",
+		KUANTITI: 1,
+		KOS_SEUNIT: 1,
+		JUMLAH_NILAI: 1,
+		PIHAK_TERLIBAT: "Pembekal Ujian",
+		BAHAGIAN: "Stor",
+		TUJUAN: "Ujian",
+		CATATAN: "",
+		CREATED_BY_EMAIL: TEST_USER_EMAIL,
+		CREATED_BY_NAME: "ITU Melaka",
+		STATUS: "SAH",
+		...overrides,
+	};
+	return TRANSACTION_HEADERS.map((header) => String(record[header] ?? ""));
 }
 
 beforeAll(async () => {
@@ -528,11 +555,183 @@ describe("ITU eSTOR Worker", () => {
 			sumberBaris: 2,
 			createdAt: "2026-07-29T09:00:00+08:00",
 			updatedAt: "2026-07-29T09:00:00+08:00",
+			jumlahMasuk: 0,
+			jumlahKeluar: 0,
+			stokSemasa: 12,
+			nilaiStokSemasa: 14814,
+			statusStok: "TERSEDIA",
 		});
 		expect(typeof body.items[0]?.kosSeunit).toBe("number");
 		expect(typeof body.items[0]?.stokAwal).toBe("number");
 		expect(typeof body.items[0]?.stokMinimum).toBe("number");
-		expect(fetchMock).toHaveBeenCalledTimes(4);
+		expect(fetchMock).toHaveBeenCalledTimes(5);
+	});
+
+	it("uses STOK_AWAL as the current-stock baseline when there are no transactions", async () => {
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: inventoryRows(1) });
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const body = await response.json<{ items: Array<Record<string, unknown>> }>();
+
+		expect(response.status).toBe(200);
+		expect(body.items[0]).toMatchObject({
+			itemId: "AT-0001",
+			stokAwal: 12,
+			jumlahMasuk: 0,
+			jumlahKeluar: 0,
+			stokSemasa: 12,
+			nilaiStokSemasa: 14814,
+			statusStok: "TERSEDIA",
+		});
+		const sheetsWrites = fetchMock.mock.calls.filter(([input, init]) =>
+			String(input).includes("sheets.googleapis.com") && init?.method === "POST"
+		);
+		expect(sheetsWrites).toHaveLength(0);
+	});
+
+	it("aggregates all six supported SAH transaction types using dynamic headers", async () => {
+		const shuffledHeaders = [
+			"STATUS", "KUANTITI", "ITEM_ID", "JENIS", "TRANSACTION_ID",
+			"TIMESTAMP", "KOS_SEUNIT", "JUMLAH_NILAI", "TUJUAN", "CATATAN",
+			"PIHAK_TERLIBAT", "BAHAGIAN", "CREATED_BY_NAME", "CREATED_BY_EMAIL",
+		];
+		const effects = [
+			["MASUK", 1.25],
+			["PELARASAN_TAMBAH", 2.5],
+			["PULANGAN", 3.75],
+			["KELUAR", 0.5],
+			["PELARASAN_TOLAK", 1],
+			["ROSAK_LUPUS", 2],
+		] as const;
+		const rows = effects.map(([JENIS, KUANTITI]) => {
+			const standardRow = transactionRow({ JENIS, KUANTITI });
+			return shuffledHeaders.map((header) =>
+				standardRow[TRANSACTION_HEADERS.indexOf(header)] ?? ""
+			);
+		});
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1),
+			transactionRows: rows,
+			transactionHeaders: shuffledHeaders,
+		});
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const item = (await response.json<{
+			items: Array<Record<string, unknown>>;
+		}>()).items[0];
+		expect(response.status).toBe(200);
+		expect(item).toMatchObject({
+			jumlahMasuk: 7.5,
+			jumlahKeluar: 3.5,
+			stokSemasa: 16,
+			nilaiStokSemasa: 19752,
+			statusStok: "TERSEDIA",
+		});
+	});
+
+	it("counts only valid SAH movements for known items", async () => {
+		const rows = [
+			transactionRow({ JENIS: "MASUK", KUANTITI: 2, STATUS: "SAH" }),
+			transactionRow({ JENIS: "KELUAR", KUANTITI: 1, STATUS: "SAH" }),
+			transactionRow({ JENIS: "MASUK", KUANTITI: 100, STATUS: "DRAF" }),
+			transactionRow({ JENIS: "KELUAR", KUANTITI: 100, STATUS: "DIBATALKAN" }),
+			transactionRow({ JENIS: "TIDAK_DIKENALI", KUANTITI: 100, STATUS: "SAH" }),
+			transactionRow({ JENIS: "MASUK", KUANTITI: "bukan-nombor", STATUS: "SAH" }),
+			transactionRow({ JENIS: "MASUK", KUANTITI: "Infinity", STATUS: "SAH" }),
+			transactionRow({ JENIS: "MASUK", KUANTITI: -4, STATUS: "SAH" }),
+			transactionRow({ ITEM_ID: "", JENIS: "MASUK", KUANTITI: 100, STATUS: "SAH" }),
+			transactionRow({ ITEM_ID: "AT-9999", JENIS: "MASUK", KUANTITI: 100, STATUS: "SAH" }),
+		];
+		mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), transactionRows: rows });
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const item = (await response.json<{
+			items: Array<Record<string, unknown>>;
+		}>()).items[0];
+		expect(response.status).toBe(200);
+		expect(item).toMatchObject({
+			jumlahMasuk: 2,
+			jumlahKeluar: 1,
+			stokSemasa: 13,
+		});
+	});
+
+	it("supports decimal quantities without display noise and rounds money to two decimals", async () => {
+		const items = inventoryRows(1);
+		items[0]![5] = "0.11";
+		items[0]![6] = "0";
+		items[0]![7] = "0";
+		mockAuthenticatedFetch({
+			inventoryRows: items,
+			transactionRows: [
+				transactionRow({ KUANTITI: 0.1 }),
+				transactionRow({ KUANTITI: 0.2 }),
+			],
+		});
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const item = (await response.json<{
+			items: Array<Record<string, unknown>>;
+		}>()).items[0];
+		expect(item).toMatchObject({
+			jumlahMasuk: 0.3,
+			jumlahKeluar: 0,
+			stokSemasa: 0.3,
+			nilaiStokSemasa: 0.03,
+			statusStok: "TERSEDIA",
+		});
+	});
+
+	it("derives HABIS, RENDAH and TERSEDIA while preserving negative stock", async () => {
+		const items = inventoryRows(3);
+		items[0]![5] = "2";
+		items[0]![6] = "1";
+		items[0]![7] = "0";
+		items[1]![5] = "3";
+		items[1]![6] = "1";
+		items[1]![7] = "2";
+		items[2]![5] = "4";
+		items[2]![6] = "1";
+		items[2]![7] = "0";
+		mockAuthenticatedFetch({
+			inventoryRows: items,
+			transactionRows: [
+				transactionRow({ ITEM_ID: "AT-0001", JENIS: "KELUAR", KUANTITI: 2.5 }),
+			],
+		});
+
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const body = await response.json<{
+			items: Array<Record<string, unknown>>;
+		}>();
+		expect(body.items[0]).toMatchObject({
+			stokSemasa: -1.5,
+			nilaiStokSemasa: -3,
+			statusStok: "HABIS",
+		});
+		expect(body.items[1]).toMatchObject({ stokSemasa: 1, statusStok: "RENDAH" });
+		expect(body.items[2]).toMatchObject({ stokSemasa: 1, statusStok: "TERSEDIA" });
+		const dashboardFixtureTotal = body.items.reduce(
+			(sum, item) => sum + Number(item.nilaiStokSemasa),
+			0,
+		);
+		expect(dashboardFixtureTotal).toBe(4);
+		expect(body.items.filter((item) => item.statusStok === "RENDAH")).toHaveLength(1);
+		expect(body.items.filter((item) => item.statusStok === "HABIS")).toHaveLength(1);
+	});
+
+	it("returns a controlled error when TRANSACTIONS cannot be read", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		mockAuthenticatedFetch({ failTransactionRead: true });
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
+		const body = await response.json<{ error: string; message: string }>();
+
+		expect(response.status).toBe(500);
+		expect(body).toEqual({
+			success: false,
+			error: "GOOGLE_SHEETS_ERROR",
+			message: "Data aplikasi tidak dapat dibaca.",
+		});
+		expect(JSON.stringify(body)).not.toContain(TEST_GOOGLE_ACCESS_TOKEN);
 	});
 
 	it("rejects an inactive registered user", async () => {

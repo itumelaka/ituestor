@@ -34,6 +34,16 @@ const CATEGORY_PREFIXES = new Map([
 	["HOUSE HOLD", "HH"],
 	["LAIN-LAIN", "LL"],
 ]);
+const POSITIVE_TRANSACTION_TYPES = new Set([
+	"MASUK",
+	"PELARASAN_TAMBAH",
+	"PULANGAN",
+]);
+const NEGATIVE_TRANSACTION_TYPES = new Set([
+	"KELUAR",
+	"PELARASAN_TOLAK",
+	"ROSAK_LUPUS",
+]);
 const MAX_JSON_BODY_BYTES = 16 * 1024;
 const IDEMPOTENCY_KEY_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -824,27 +834,100 @@ async function authorizeRequest(
 	};
 }
 
-function mapInventoryItems(sheetData: SheetsValuesResponse) {
-	return rowsToRecords(sheetData).map((record) => ({
-		itemId: record.ITEM_ID,
-		kategori: record.KATEGORI,
-		namaItem: record.NAMA_ITEM,
-		namaItemAsal: record.NAMA_ITEM_ASAL,
-		unit: record.UNIT,
-		kosSeunit: Number(
+function roundDecimal(value: number, decimalPlaces = 10): number {
+	const multiplier = 10 ** decimalPlaces;
+	return Math.round((value + Number.EPSILON) * multiplier) / multiplier;
+}
+
+function roundMoney(value: number): number {
+	return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+interface StockMovement {
+	jumlahMasuk: number;
+	jumlahKeluar: number;
+}
+
+function aggregateStockMovements(
+	transactionsData: SheetsValuesResponse,
+	knownItemIds: Set<string>,
+): Map<string, StockMovement> {
+	const movements = new Map<string, StockMovement>();
+
+	for (const record of rowsToRecords(transactionsData)) {
+		if (String(record.STATUS ?? "").trim().toUpperCase() !== "SAH") continue;
+
+		const itemId = String(record.ITEM_ID ?? "").trim();
+		if (!itemId || !knownItemIds.has(itemId)) continue;
+
+		const quantity = Number(String(record.KUANTITI ?? "").trim());
+		if (!Number.isFinite(quantity) || quantity <= 0) continue;
+
+		const type = String(record.JENIS ?? "").trim().toUpperCase();
+		const positive = POSITIVE_TRANSACTION_TYPES.has(type);
+		const negative = NEGATIVE_TRANSACTION_TYPES.has(type);
+		if (!positive && !negative) continue;
+
+		const current = movements.get(itemId) ?? {
+			jumlahMasuk: 0,
+			jumlahKeluar: 0,
+		};
+		if (positive) current.jumlahMasuk = roundDecimal(current.jumlahMasuk + quantity);
+		if (negative) current.jumlahKeluar = roundDecimal(current.jumlahKeluar + quantity);
+		movements.set(itemId, current);
+	}
+
+	return movements;
+}
+
+function mapInventoryItems(
+	sheetData: SheetsValuesResponse,
+	transactionsData: SheetsValuesResponse,
+) {
+	const records = rowsToRecords(sheetData);
+	const itemIds = new Set(records.map((record) => String(record.ITEM_ID ?? "").trim()));
+	const movements = aggregateStockMovements(transactionsData, itemIds);
+
+	return records.map((record) => {
+		const itemId = record.ITEM_ID;
+		const kosSeunit = Number(
 			String(record.KOS_SEUNIT)
 				.replace("RM", "")
 				.replace(/,/g, "")
 				.trim(),
-		),
-		stokAwal: Number(record.STOK_AWAL || 0),
-		stokMinimum: Number(record.STOK_MINIMUM || 0),
-		status: record.STATUS,
-		sumberTab: record.SUMBER_TAB,
-		sumberBaris: Number(record.SUMBER_BARIS || 0),
-		createdAt: record.CREATED_AT,
-		updatedAt: record.UPDATED_AT,
-	}));
+		);
+		const stokAwal = Number(record.STOK_AWAL || 0);
+		const stokMinimum = Number(record.STOK_MINIMUM || 0);
+		const movement = movements.get(itemId) ?? { jumlahMasuk: 0, jumlahKeluar: 0 };
+		const stokSemasa = roundDecimal(stokAwal + movement.jumlahMasuk - movement.jumlahKeluar);
+		const nilaiStokSemasa = roundMoney(stokSemasa * kosSeunit);
+		const statusStok = stokSemasa <= 0
+			? "HABIS"
+			: stokSemasa <= stokMinimum
+				? "RENDAH"
+				: "TERSEDIA";
+
+		return {
+			itemId: record.ITEM_ID,
+			kategori: record.KATEGORI,
+			namaItem: record.NAMA_ITEM,
+			namaItemAsal: record.NAMA_ITEM_ASAL,
+			unit: record.UNIT,
+			kosSeunit,
+			stokAwal,
+			stokMinimum,
+			status: record.STATUS,
+			sumberTab: record.SUMBER_TAB,
+			sumberBaris: Number(record.SUMBER_BARIS || 0),
+			createdAt: record.CREATED_AT,
+			updatedAt: record.UPDATED_AT,
+			jumlahMasuk: movement.jumlahMasuk,
+			jumlahKeluar: movement.jumlahKeluar,
+			stokSemasa,
+			nilaiStokSemasa,
+			statusStok,
+		};
+	});
 }
 
 async function protectedRoute(
@@ -861,12 +944,19 @@ async function protectedRoute(
 		});
 	}
 
-	const sheetData = await getSheetValues(
-		env,
-		env.MASTER_ITEM_SHEET,
-		authorization.googleAccessToken,
-	);
-	const items = mapInventoryItems(sheetData);
+	const [sheetData, transactionsData] = await Promise.all([
+		getSheetValues(
+			env,
+			env.MASTER_ITEM_SHEET,
+			authorization.googleAccessToken,
+		),
+		getSheetValues(
+			env,
+			env.TRANSACTIONS_SHEET,
+			authorization.googleAccessToken,
+		),
+	]);
+	const items = mapInventoryItems(sheetData, transactionsData);
 
 	return Response.json({
 		success: true,

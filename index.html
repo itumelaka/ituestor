@@ -109,7 +109,7 @@
 
         <section class="stats" aria-label="Statistik stok">
           <article class="stat blue"><div><span>JUMLAH ITEM</span><strong id="totalItems">—</strong><small>Jenis Item</small></div><i>📋</i></article>
-          <article class="stat green"><div><span>NILAI STOK DIKETAHUI</span><strong id="knownStockValue">—</strong><small>Berdasarkan stok awal</small></div><i>💵</i></article>
+          <article class="stat green"><div><span>NILAI STOK SEMASA</span><strong id="knownStockValue">—</strong><small>Berdasarkan stok semasa terhitung</small></div><i>💵</i></article>
           <article class="stat yellow"><div><span>STOK RENDAH</span><strong id="lowStockCount">—</strong><small>Item</small></div><i>⚠️</i></article>
           <article class="stat red"><div><span>STOK HABIS</span><strong id="outOfStockCount">—</strong><small>Item</small></div><i>❌</i></article>
           <article class="stat purple"><div><span>PERMOHONAN MENUNGGU</span><strong class="inactive-value">Belum aktif</strong><small>Modul permohonan</small></div><i>📋</i></article>
@@ -143,7 +143,7 @@
             <div class="table-wrap">
               <table>
                 <thead><tr><th>TARIKH &amp; MASA</th><th>JENIS</th><th>ITEM</th><th>KUANTITI</th><th>OLEH</th></tr></thead>
-                <tbody><tr><td colspan="5" class="empty-state">Transaksi belum diaktifkan</td></tr></tbody>
+                <tbody><tr><td colspan="5" class="empty-state">Paparan transaksi terkini belum tersedia</td></tr></tbody>
               </table>
             </div>
             <a href="#transaksi">Lihat semua transaksi</a>
@@ -254,7 +254,7 @@
             <span>Status stok</span>
             <select id="stockFilter">
               <option value="">Semua</option>
-              <option value="ADA STOK">Ada Stok</option>
+              <option value="TERSEDIA">Ada Stok</option>
               <option value="RENDAH">Rendah</option>
               <option value="HABIS">Habis</option>
             </select>
@@ -287,11 +287,11 @@
               <thead>
                 <tr>
                   <th>ITEM ID</th><th>NAMA ITEM</th><th>KATEGORI</th><th>UNIT</th>
-                  <th>KOS SEUNIT</th><th>STOK AWAL</th><th>STOK MIN.</th>
-                  <th>NILAI ITEM</th><th>STATUS ITEM</th><th>STATUS STOK</th>
+                  <th>KOS SEUNIT</th><th>STOK SEMASA</th><th>STOK MIN.</th>
+                  <th>NILAI SEMASA</th><th>STATUS ITEM</th><th>STATUS STOK</th><th>TINDAKAN</th>
                 </tr>
               </thead>
-              <tbody id="itemRows"><tr><td colspan="10" class="empty-state">Menunggu data item…</td></tr></tbody>
+              <tbody id="itemRows"><tr><td colspan="11" class="empty-state">Menunggu data item…</td></tr></tbody>
             </table>
           </div>
           <div class="item-cards" id="itemCards"></div>
@@ -395,6 +395,9 @@
         <button id="closeItemModal" class="modal-close" type="button" aria-label="Tutup butiran item">×</button>
       </div>
       <dl id="itemDetails" class="item-details"></dl>
+      <div class="modal-actions">
+        <button id="detailAddStock" class="add-stock-action" type="button" hidden>Tambah Stok</button>
+      </div>
     </section>
   </div>
 

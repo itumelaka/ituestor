@@ -24,6 +24,7 @@ const ITEMS_PER_PAGE = 20;
 let loadedItems = [];
 let registerPage = 1;
 let lastFocusedItem = null;
+let openedItemId = "";
 let inventoryRequest = null;
 let inventoryLoaded = false;
 let supabaseClient = null;
@@ -91,6 +92,7 @@ const elements = {
   itemModalTitle: document.getElementById("itemModalTitle"),
   itemDetails: document.getElementById("itemDetails"),
   closeItemModal: document.getElementById("closeItemModal"),
+  detailAddStock: document.getElementById("detailAddStock"),
   authGate: document.getElementById("authGate"),
   authState: document.getElementById("authState"),
   authStateMessage: document.getElementById("authStateMessage"),
@@ -178,23 +180,31 @@ function canCreateItem() {
   return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
 
+function canAddStock() {
+  return ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role);
+}
+
 function itemNumbers(item) {
   return {
-    stock: numericValue(item.stokAwal, "stokAwal", item),
+    initialStock: numericValue(item.stokAwal, "stokAwal", item),
+    incoming: numericValue(item.jumlahMasuk, "jumlahMasuk", item),
+    outgoing: numericValue(item.jumlahKeluar, "jumlahKeluar", item),
+    stock: numericValue(item.stokSemasa, "stokSemasa", item),
     minimum: numericValue(item.stokMinimum, "stokMinimum", item),
-    cost: numericValue(item.kosSeunit, "kosSeunit", item)
+    cost: numericValue(item.kosSeunit, "kosSeunit", item),
+    currentValue: numericValue(item.nilaiStokSemasa, "nilaiStokSemasa", item)
   };
 }
 
 function renderStockAlerts(items) {
   const alerts = items.map((item) => ({ item, ...itemNumbers(item) }))
-    .filter(({ stock, minimum }) => stock <= 0 || (stock > 0 && stock <= minimum));
+    .filter(({ item }) => item.statusStok === "HABIS" || item.statusStok === "RENDAH");
 
   if (!alerts.length) {
     const searching = searchInput.value.trim();
     elements.stockAlertRows.innerHTML = `<tr><td colspan="4" class="empty-state">${
       searching ? "Tiada item stok rendah atau habis sepadan dengan carian." :
-        "Tiada item stok rendah atau habis berdasarkan stok awal dan stok minimum semasa."
+        "Tiada item stok rendah atau habis berdasarkan stok semasa dan stok minimum."
     }</td></tr>`;
     return;
   }
@@ -230,9 +240,9 @@ function renderCategories(items) {
 
 function renderDashboard(items, apiCount) {
   const metrics = items.map((item) => ({ item, ...itemNumbers(item) }));
-  const knownValue = metrics.reduce((sum, entry) => sum + entry.stock * entry.cost, 0);
-  const low = metrics.filter(({ stock, minimum }) => stock > 0 && stock <= minimum).length;
-  const out = metrics.filter(({ stock }) => stock <= 0).length;
+  const knownValue = metrics.reduce((sum, entry) => sum + entry.currentValue, 0);
+  const low = metrics.filter(({ item }) => item.statusStok === "RENDAH").length;
+  const out = metrics.filter(({ item }) => item.statusStok === "HABIS").length;
 
   elements.totalItems.textContent = numericValue(apiCount, "count", { itemId: "respons API" }).toLocaleString("ms-MY");
   elements.knownStockValue.textContent = new Intl.NumberFormat("ms-MY", {
@@ -255,17 +265,24 @@ function stockStatus(stock, minimum) {
   if (!stock.valid || !minimum.valid) return "—";
   if (stock.value <= 0) return "HABIS";
   if (stock.value <= minimum.value) return "RENDAH";
-  return "ADA STOK";
+  return "TERSEDIA";
 }
 
 function itemView(item) {
-  const stock = parsedNumber(item.stokAwal, "stokAwal", item);
+  const initialStock = parsedNumber(item.stokAwal, "stokAwal", item);
+  const incoming = parsedNumber(item.jumlahMasuk, "jumlahMasuk", item);
+  const outgoing = parsedNumber(item.jumlahKeluar, "jumlahKeluar", item);
+  const stock = parsedNumber(item.stokSemasa, "stokSemasa", item);
   const minimum = parsedNumber(item.stokMinimum, "stokMinimum", item);
   const cost = parsedNumber(item.kosSeunit, "kosSeunit", item);
-  const value = stock.valid && cost.valid
-    ? { valid: true, value: stock.value * cost.value }
-    : { valid: false, value: 0 };
-  return { item, stock, minimum, cost, value, operationalStatus: stockStatus(stock, minimum) };
+  const value = parsedNumber(item.nilaiStokSemasa, "nilaiStokSemasa", item);
+  const apiStockStatus = ["HABIS", "RENDAH", "TERSEDIA"].includes(item.statusStok)
+    ? item.statusStok
+    : stockStatus(stock, minimum);
+  return {
+    item, initialStock, incoming, outgoing, stock, minimum, cost, value,
+    operationalStatus: apiStockStatus
+  };
 }
 
 function formatNumber(number) {
@@ -277,7 +294,7 @@ function formatCurrency(number) {
 }
 
 function statusClass(status) {
-  if (status === "ADA STOK") return "status-in";
+  if (status === "TERSEDIA") return "status-in";
   if (status === "RENDAH") return "status-low";
   if (status === "HABIS") return "status-out";
   return "";
@@ -333,7 +350,7 @@ function updateIncomingItemSummary() {
   elements.registerMissingItem.hidden = true;
   const view = itemView(item);
   elements.incomingItemSummary.textContent =
-    `${item.itemId} · ${item.namaItem || item.namaItemAsal || "Tanpa nama"} · ${item.kategori || "Tiada kategori"} · ${item.unit || "Tiada unit"} · Stok awal ${formatNumber(view.stock)} · Kos semasa ${formatCurrency(view.cost)}`;
+    `${item.itemId} · ${item.namaItem || item.namaItemAsal || "Tanpa nama"} · ${item.kategori || "Tiada kategori"} · ${item.unit || "Tiada unit"} · Stok semasa ${formatNumber(view.stock)} · Kos rujukan ${formatCurrency(view.cost)}`;
   if (!elements.incomingUnitCost.value && view.cost.valid) {
     elements.incomingUnitCost.value = view.cost.value.toFixed(2);
   }
@@ -544,7 +561,12 @@ function mergeConfirmedItem(item) {
     ...item,
     namaItemAsal: item.namaItem,
     sumberTab: "NEW_ITEM",
-    sumberBaris: 0
+    sumberBaris: 0,
+    jumlahMasuk: 0,
+    jumlahKeluar: 0,
+    stokSemasa: 0,
+    nilaiStokSemasa: 0,
+    statusStok: "HABIS"
   }];
   inventoryLoaded = true;
   renderDashboard(loadedItems, loadedItems.length);
@@ -645,8 +667,16 @@ async function submitCreateItem(event) {
 
 function continueCreatedItemToIncoming() {
   if (!createdItemForIncoming?.itemId) return;
-  const itemId = createdItemForIncoming.itemId;
+  goToIncomingItem(createdItemForIncoming.itemId);
+}
+
+function goToIncomingItem(itemId) {
+  if (!canAddStock()) return;
+  const item = loadedItems.find((candidate) => String(candidate.itemId) === String(itemId));
+  if (!item || String(item.status ?? "").trim().toUpperCase() !== "AKTIF") return;
+  closeItemDetails();
   window.location.hash = "#barang-masuk";
+  showView("#barang-masuk");
   elements.incomingItemSearch.value = "";
   populateIncomingItems();
   elements.incomingItem.value = itemId;
@@ -703,16 +733,21 @@ function renderRegisterItem(view, card = false) {
   const unit = escapeHtml(item.unit || "—");
   const apiStatus = escapeHtml(item.status || "—");
   const operation = escapeHtml(view.operationalStatus);
+  const addStockAction = canAddStock() && item.status === "AKTIF"
+    ? `<button class="add-stock-action" type="button" data-add-stock-id="${id}" aria-label="Tambah stok untuk ${name}">Tambah Stok</button>`
+    : "";
   if (card) {
-    return `<button class="item-card" type="button" data-item-id="${id}" aria-label="Lihat butiran ${name}">
+    return `<article class="item-card">
+      <button class="item-card-details" type="button" data-item-id="${id}" aria-label="Lihat butiran ${name}">
       <span class="item-card-head"><span><small>${id}</small><h3>${name}</h3></span><b class="status-badge ${statusClass(view.operationalStatus)}">${operation}</b></span>
       <span class="item-card-grid">
         <span>Kategori<strong>${category}</strong></span><span>Unit<strong>${unit}</strong></span>
-        <span>Stok awal<strong>${formatNumber(view.stock)}</strong></span><span>Stok minimum<strong>${formatNumber(view.minimum)}</strong></span>
-        <span>Kos seunit<strong>${formatCurrency(view.cost)}</strong></span><span>Nilai item<strong>${formatCurrency(view.value)}</strong></span>
+        <span>Stok semasa<strong>${formatNumber(view.stock)}</strong></span><span>Stok minimum<strong>${formatNumber(view.minimum)}</strong></span>
+        <span>Kos seunit<strong>${formatCurrency(view.cost)}</strong></span><span>Nilai semasa<strong>${formatCurrency(view.value)}</strong></span>
         <span>Status item<strong>${apiStatus}</strong></span>
       </span>
-    </button>`;
+      </button>${addStockAction}
+    </article>`;
   }
   return `<tr tabindex="0" data-item-id="${id}" aria-label="Lihat butiran ${name}">
     <td>${id}</td><td>${name}</td><td>${category}</td><td>${unit}</td>
@@ -720,6 +755,7 @@ function renderRegisterItem(view, card = false) {
     <td class="number-cell">${formatNumber(view.minimum)}</td><td class="money">${formatCurrency(view.value)}</td>
     <td><b class="status-badge ${item.status === "AKTIF" ? "api-active" : ""}">${apiStatus}</b></td>
     <td><b class="status-badge ${statusClass(view.operationalStatus)}">${operation}</b></td>
+    <td>${addStockAction}</td>
   </tr>`;
 }
 
@@ -734,7 +770,7 @@ function activeFilterLabels() {
 
 function renderRegister() {
   if (!loadedItems.length) {
-    elements.itemRows.innerHTML = '<tr><td colspan="10" class="empty-state">Tiada item tersedia daripada API.</td></tr>';
+    elements.itemRows.innerHTML = '<tr><td colspan="11" class="empty-state">Tiada item tersedia daripada API.</td></tr>';
     elements.itemCards.innerHTML = '<p class="empty-state">Tiada item tersedia daripada API.</p>';
     elements.registerSummary.textContent = "0 item";
     elements.pageSummary.textContent = "Halaman 0 daripada 0";
@@ -754,7 +790,7 @@ function renderRegister() {
   elements.activeFilters.innerHTML = filters.map((label) => `<span class="filter-chip">${escapeHtml(label)}</span>`).join("");
   if (!pageItems.length) {
     const message = "Tiada item sepadan dengan carian atau penapis semasa.";
-    elements.itemRows.innerHTML = `<tr><td colspan="10" class="empty-state">${message}</td></tr>`;
+    elements.itemRows.innerHTML = `<tr><td colspan="11" class="empty-state">${message}</td></tr>`;
     elements.itemCards.innerHTML = `<p class="empty-state">${message}</p>`;
   } else {
     elements.itemRows.innerHTML = pageItems.map((view) => renderRegisterItem(view)).join("");
@@ -785,22 +821,31 @@ function showView(hash) {
   if (incoming && loadedItems.length) populateIncomingItems();
 }
 
-function openItemDetails(itemId, trigger) {
-  const item = loadedItems.find((candidate) => String(candidate.itemId) === itemId);
-  if (!item) return;
+function renderItemDetails(item) {
   const view = itemView(item);
   const fields = [
     ["Item ID", item.itemId], ["Nama item", item.namaItem], ["Nama item asal", item.namaItemAsal],
     ["Kategori", item.kategori], ["Unit", item.unit], ["Kos seunit", formatCurrency(view.cost)],
-    ["Stok awal", formatNumber(view.stock)], ["Stok minimum", formatNumber(view.minimum)],
-    ["Nilai item", formatCurrency(view.value)], ["Status API", item.status],
-    ["Status stok", view.operationalStatus], ["Sumber tab", item.sumberTab],
+    ["Stok awal", formatNumber(view.initialStock)], ["Jumlah masuk", formatNumber(view.incoming)],
+    ["Jumlah keluar", formatNumber(view.outgoing)], ["Stok semasa", formatNumber(view.stock)],
+    ["Stok minimum", formatNumber(view.minimum)], ["Nilai stok semasa", formatCurrency(view.value)],
+    ["Status API", item.status], ["Status stok", view.operationalStatus], ["Sumber tab", item.sumberTab],
     ["Sumber baris", item.sumberBaris], ["Dicipta", item.createdAt], ["Dikemas kini", item.updatedAt]
   ];
   elements.itemModalTitle.textContent = item.namaItem || item.itemId || "Butiran item";
   elements.itemDetails.innerHTML = fields.map(([label, value], index) =>
     `<div class="${index === 2 ? "detail-wide" : ""}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`
   ).join("");
+  const mayAddStock = canAddStock() && String(item.status ?? "").trim().toUpperCase() === "AKTIF";
+  elements.detailAddStock.hidden = !mayAddStock;
+  elements.detailAddStock.dataset.addStockId = mayAddStock ? item.itemId : "";
+}
+
+function openItemDetails(itemId, trigger) {
+  const item = loadedItems.find((candidate) => String(candidate.itemId) === itemId);
+  if (!item) return;
+  renderItemDetails(item);
+  openedItemId = itemId;
   lastFocusedItem = trigger;
   elements.itemModal.hidden = false;
   document.body.style.overflow = "hidden";
@@ -811,6 +856,7 @@ function closeItemDetails() {
   if (elements.itemModal.hidden) return;
   elements.itemModal.hidden = true;
   document.body.style.overflow = "";
+  openedItemId = "";
   if (lastFocusedItem) lastFocusedItem.focus();
 }
 
@@ -859,6 +905,7 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   inventoryLoaded = false;
   loadedItems = [];
   currentApplicationUser = null;
+  openedItemId = "";
   incomingAttemptKey = "";
   incomingAttemptFingerprint = "";
   createItemAttemptKey = "";
@@ -1115,6 +1162,11 @@ async function loadDashboardData(accessToken) {
     populateRegisterFilters();
     populateIncomingItems();
     renderRegister();
+    if (!elements.itemModal.hidden && openedItemId) {
+      const openedItem = loadedItems.find((item) => String(item.itemId) === openedItemId);
+      if (openedItem) renderItemDetails(openedItem);
+      else closeItemDetails();
+    }
     setDataState("ready", "");
     setRegisterState(loadedItems.length ? "ready" : "empty", loadedItems.length ? "" : "API tidak mengandungi item untuk dipaparkan.");
     return true;
@@ -1253,12 +1305,19 @@ elements.nextPage.addEventListener("click", () => {
 });
 [elements.itemRows, elements.itemCards].forEach((container) => {
   container.addEventListener("click", (event) => {
+    const addStockTarget = event.target.closest("[data-add-stock-id]");
+    if (addStockTarget) {
+      event.stopPropagation();
+      goToIncomingItem(addStockTarget.dataset.addStockId);
+      return;
+    }
     const target = event.target.closest("[data-item-id]");
     if (target) openItemDetails(target.dataset.itemId, target);
   });
 });
 elements.itemRows.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
+    if (event.target.closest("[data-add-stock-id]")) return;
     const target = event.target.closest("[data-item-id]");
     if (target) {
       event.preventDefault();
@@ -1267,6 +1326,9 @@ elements.itemRows.addEventListener("keydown", (event) => {
   }
 });
 elements.closeItemModal.addEventListener("click", closeItemDetails);
+elements.detailAddStock.addEventListener("click", () => {
+  goToIncomingItem(elements.detailAddStock.dataset.addStockId);
+});
 elements.itemModal.addEventListener("click", (event) => {
   if (event.target === elements.itemModal) closeItemDetails();
 });
