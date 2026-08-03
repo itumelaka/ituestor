@@ -1,152 +1,133 @@
 # Status Projek ITU eSTOR
 
-**Tarikh status disahkan:** 30 Julai 2026
+**Tarikh status disahkan:** 3 Ogos 2026
 
 ## Ringkasan
 
-ITU eSTOR kini beroperasi sebagai aplikasi produksi baca sahaja dengan pengesahan identiti dan kebenaran backend. Frontend GitHub Pages menggunakan Supabase Google Auth, menghantar token sesi kepada Cloudflare Worker, dan hanya memuatkan inventori selepas Worker mengesahkan pengguna terhadap tab `USERS`.
+ITU eSTOR kini mempunyai aliran produksi terlindung untuk pendaftaran item, Barang Masuk, pengiraan stok semasa, sejarah transaksi dan pembatalan transaksi. Frontend GitHub Pages menggunakan sesi Supabase; Worker mengesahkan identiti serta peranan melalui `USERS` sebelum membaca atau menulis Google Sheets.
 
-PWA branding turut aktif menggunakan logo rasmi ITU eSTOR. Manifest, service worker, favicon dan semua ikon produksi telah disahkan boleh dicapai, manakala shell statik tersedia sebagai fallback luar talian.
+Sistem belum dilepaskan secara rasmi kepada pegawai stor. Empat tab kategori legasi kekal sebagai sistem operasi sehingga rekonsiliasi akhir dan tarikh go-live dipersetujui.
 
-## Infrastruktur pengeluaran
+## Infrastruktur produksi
 
 | Komponen | Nilai / status |
 |---|---|
 | Repositori | <https://github.com/itumelaka/ituestor> |
 | Frontend | <https://itumelaka.github.io/ituestor/> |
 | Worker API | <https://ituestor-api.itumelaka.workers.dev> |
-| Version ID Worker | `e369d89f-6be3-46a0-a312-7a145aeb602f` |
+| Version ID Worker | `4465e0f1-4687-4e48-82a2-2e710e5b6dfc` |
 | Supabase | `ITU eSTOR` / `tzsykhjfhmctasjscwch` |
 | Persekitaran Worker | `production` |
-| Spreadsheet | `STOK BARANG (10 JULAI 2026)` |
-| Pengguna produksi disahkan | ITU Melaka / `itumelaka@gmail.com` / `SUPER_ADMIN` / `AKTIF` |
+| Jumlah item produksi | 130 |
 
-## Milestone produksi — 30 Julai 2026
-
-### Kebenaran backend
-
-Commit `fa49d9f` (`feat: enforce Supabase authorization in Worker`) melengkapkan aliran berikut:
-
-1. pengguna log masuk dengan Google melalui Supabase Auth;
-2. frontend mendapatkan sesi Supabase aktif;
-3. frontend menghantar bearer token kepada Worker;
-4. Worker mengesahkan token melalui endpoint rasmi Supabase `/auth/v1/user`;
-5. Worker mengekstrak dan menormalkan e-mel yang telah disahkan;
-6. Worker membaca `USERS!A:Z` melalui akaun perkhidmatan Google;
-7. Worker membenarkan akses hanya apabila `EMAIL` sepadan, `STATUS = AKTIF`, dan `ROLE` sah.
-
-Peranan baca yang dibenarkan:
-
-- `SUPER_ADMIN`
-- `ADMIN_STOR`
-- `PEMBANTU_STOR`
-- `VIEWER`
-
-`GET /health` kekal awam. `GET /api/me` dan `GET /api/items` kini dilindungi dan mengembalikan `401 AUTH_REQUIRED` apabila token tiada.
-
-### PWA branding
-
-Commit `bbe111c` (`feat: add ITU eSTOR PWA branding`) menerbitkan:
-
-- logo rasmi `assets/images/itu_estor_inventory_icon.png` pada skrin log masuk;
-- `manifest.webmanifest`;
-- `service-worker.js`;
-- `assets/icons/icon-192.png`;
-- `assets/icons/icon-512.png`;
-- `assets/icons/icon-maskable-512.png`;
-- `assets/icons/apple-touch-icon.png`;
-- `assets/icons/favicon-32.png`.
-
-Manifest, service worker, favicon dan ikon disahkan mengembalikan `200`. Service worker mencache aset shell tempatan yang stabil sahaja. Respons Supabase, Worker API, permintaan dengan bearer token dan data khusus pengguna tidak dicache.
-
-## Status endpoint produksi
-
-| Kaedah | Endpoint | Akses | Keputusan disahkan |
-|---|---|---|---|
-| `GET` | `/health` | Awam | `200`, perkhidmatan berjalan dalam `production` |
-| `GET` | `/api/me` | Dilindungi | Tanpa token: `401 AUTH_REQUIRED` |
-| `GET` | `/api/items` | Dilindungi | Tanpa token: `401 AUTH_REQUIRED` |
-
-Lihat [API.md](API.md) untuk kontrak respons.
-
-## Data produksi disahkan
-
-| Metrik | Nilai |
-|---|---:|
-| Jumlah item | 130 |
-| Jumlah kuantiti awal | 274 |
-| Nilai stok awal diketahui | RM2,334.40 |
-| Stok rendah | 0 |
-| Stok habis | 80 |
-| `ALAT TULIS` | 63 |
-| `BAHAN KIMIA` | 16 |
-| `HOUSE HOLD` | 40 |
-| `LAIN-LAIN` | 11 |
-
-Permohonan dan transaksi kekal dipaparkan sebagai `Belum aktif`.
-
-## Kawalan produksi yang selesai
-
-### Identiti dan akses
-
-- [x] Google OAuth melalui Supabase Auth.
-- [x] Frontend dikunci apabila tiada sesi.
-- [x] Pemulihan sesi, pemantauan auth dan log keluar.
-- [x] Bearer token dihantar kepada `/api/me` dan `/api/items`.
-- [x] Worker mengesahkan token dengan Supabase.
-- [x] Worker menggunakan e-mel yang telah disahkan, bukan metadata Google sebagai bukti peranan.
-- [x] `USERS` dipetakan berdasarkan header.
-- [x] Hanya pengguna `AKTIF` dengan peranan sah dibenarkan.
-- [x] Pengguna tidak tersenarai, tidak aktif dan peranan tidak sah ditolak.
-- [x] `/api/items` dilindungi.
-
-### Data dan API
-
-- [x] `MASTER_ITEM` direkonsiliasi kepada 130 item.
-- [x] Akaun perkhidmatan Google menggunakan akses Viewer dan skop baca sahaja.
-- [x] Dashboard dan Daftar Item menggunakan data produksi.
-- [x] CORS produksi berfungsi dengan header `Authorization`.
-- [x] Tiada operasi tulis aktif.
-
-### Ujian
-
-- [x] 19 daripada 19 ujian Worker lulus.
-- [x] Liputan merangkumi health awam, token tiada, token tidak sah, akses sah, pengguna tidak aktif, pengguna tidak berdaftar dan peranan tidak sah.
-- [x] Ujian menggunakan mock Supabase dan Google Sheets tanpa panggilan rangkaian produksi.
-
-### PWA
-
-- [x] Logo rasmi dipaparkan secara responsif pada skrin log masuk.
-- [x] Manifest dan ikon lengkap diterbitkan.
-- [x] Service worker menyediakan cache shell statik.
-- [x] Permintaan auth, API, token dan data pengguna dikecualikan daripada cache.
-- [x] Shell statik disahkan boleh dimuatkan di luar talian.
-
-## Commit pengeluaran disahkan
+## Milestone produksi 3 Ogos 2026
 
 | Commit | Perubahan |
 |---|---|
-| `d567a6a` | `feat: connect dashboard to production inventory API` |
-| `e1d3df5` | `feat: add Supabase Google authentication` |
-| `fa49d9f` | `feat: enforce Supabase authorization in Worker` |
-| `bbe111c` | `feat: add ITU eSTOR PWA branding` |
+| `54640a7` | `feat: add Barang Masuk transaction flow` |
+| `51debd2` | `feat: add new inventory item registration` |
+| `6385007` | `feat: add current stock calculation and quick stock entry` |
+| `d8b0d1d` | `refactor: simplify Barang Masuk form` |
+| `4c74431` | `feat: add transaction history and cancellation` |
 
-## Modul dan kawalan yang masih menunggu
+### Modul produksi lengkap
 
-- [ ] Google OAuth diterbitkan keluar daripada status `Testing`.
-- [ ] Endpoint Barang Masuk dan Barang Keluar.
-- [ ] Lejar `TRANSACTIONS` dan pengiraan stok semasa.
-- [ ] Aliran `REQUESTS`, kelulusan dan penyerahan.
-- [ ] Endpoint dan paparan `AUDIT_LOG`.
-- [ ] Pengurusan pengguna dan perubahan peranan.
-- [ ] Operasi tulis untuk item dan tetapan.
-- [ ] Kawalan peranan khusus bagi setiap operasi tulis.
+- [x] Daftar Item Baharu dengan ID kategori, semakan pendua, idempotensi dan audit.
+- [x] Barang Masuk dengan Item, Kuantiti, Kos seunit dan Catatan pilihan.
+- [x] Pengiraan stok semasa daripada `STOK_AWAL` dan transaksi `SAH`.
+- [x] Nilai stok semasa serta status `HABIS`, `RENDAH` dan `TERSEDIA`.
+- [x] Pintasan Tambah Stok daripada baris dan modal item.
+- [x] Register transaksi, carian, penapis dan modal butiran.
+- [x] Pembatalan transaksi tanpa pemadaman fizikal.
+- [x] Dashboard, daftar item dan butiran item disegarkan selepas perubahan yang disahkan.
 
-Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log dan pengurusan pengguna tidak boleh diaktifkan sebelum endpoint tulis, validasi data, audit dan ujian kebenaran khusus operasi siap.
+### Polisi peranan produksi
 
-## Batasan semasa
+| Tindakan | SUPER_ADMIN | ADMIN_STOR | PEMBANTU_STOR | VIEWER |
+|---|:---:|:---:|:---:|:---:|
+| Lihat profil, item dan transaksi | Ya | Ya | Ya | Ya |
+| Daftar item baharu | Ya | Ya | Tidak | Tidak |
+| Rekod Barang Masuk | Ya | Ya | Ya | Tidak |
+| Tambah Stok melalui pintasan | Ya | Ya | Ya | Tidak |
+| Batalkan transaksi `SAH` | Ya | Ya | Tidak | Tidak |
 
-1. Google OAuth masih `Testing`; hanya pengguna ujian yang dikonfigurasi boleh melengkapkan OAuth.
-2. Nilai stok dashboard masih dikira daripada `STOK_AWAL`, bukan `TRANSACTIONS`.
-3. API produksi hanya menyokong operasi baca.
-4. Tab `TRANSACTIONS`, `REQUESTS`, `AUDIT_LOG` dan `SETTINGS` belum didedahkan sebagai modul aktif.
+Semua akses memerlukan token Supabase sah, e-mel sepadan dalam `USERS`, `STATUS = AKTIF` dan peranan yang dibenarkan.
+
+## Tingkah laku data produksi
+
+### Item baharu
+
+Worker menjana awalan `AT-`, `BK-`, `HH-` atau `LL-` berdasarkan kategori. Rekod baharu menggunakan `STOK_AWAL = 0`, `STATUS = AKTIF`, `SUMBER_TAB = NEW_ITEM` dan `SUMBER_BARIS = 0`. Pendua dinilai menggunakan kategori, nama dan unit yang telah dinormalisasi.
+
+### Barang Masuk dan stok semasa
+
+Worker menetapkan `JENIS = MASUK`, `STATUS = SAH`, cap masa, identiti pencipta dan `JUMLAH_NILAI`. Apabila medan legasi tidak dihantar, `PIHAK_TERLIBAT`, `BAHAGIAN` dan `TUJUAN` disimpan sebagai rentetan kosong tanpa mengubah skema `TRANSACTIONS`.
+
+```text
+STOK_SEMASA = STOK_AWAL + JUMLAH_MASUK - JUMLAH_KELUAR
+```
+
+Hanya transaksi `SAH` dikira. `MASTER_ITEM.STOK_AWAL` tidak dikemas kini oleh pergerakan stok.
+
+### Pembatalan
+
+Pembatalan tidak memadam transaksi. Worker mengubah sel `STATUS` sahaja daripada `SAH` kepada `DIBATALKAN` dan menambah audit `CANCEL / TRANSACTION`. ID audit deterministik membolehkan retry memulihkan keadaan status sudah berubah tetapi audit belum berjaya ditambah. Transaksi yang dibatalkan tidak lagi mempengaruhi stok.
+
+## Rekod ujian produksi terkawal
+
+Transaksi berikut ialah **rekod ujian pengesahan produksi**, bukan stok operasi biasa:
+
+| Medan | Nilai |
+|---|---|
+| Transaction ID | `TXN-2B7808B76CBEA4CA9FEF3E1A` |
+| Item | `LL-0006` — Bateri D |
+| Jenis | `MASUK` |
+| Kuantiti | 10 |
+| Kos seunit | RM3.00 |
+| Jumlah nilai | RM30.00 |
+| Status asal | `SAH` |
+| Status akhir | `DIBATALKAN` |
+
+Selepas pembatalan, stok Bateri D kembali kepada 0, nilai kembali kepada RM0.00, status stok kembali kepada `HABIS`, dan audit pembatalan telah disahkan.
+
+## Ujian disahkan
+
+- Suite Barang Masuk ringkas: **68/68 lulus**.
+- Suite akhir sejarah/pembatalan transaksi: **82/82 lulus**.
+- Semakan TypeScript, sintaks JavaScript, Wrangler dry-run dan `git diff --check` lulus.
+- Ujian automatik menggunakan mock Supabase dan Google Sheets; tiada penulisan produksi dilakukan oleh suite.
+
+## Peralihan go-live
+
+### Sebelum go-live
+
+1. Pegawai stor terus menggunakan `BAHAN KIMIA`, `ALAT TULIS`, `HOUSE HOLD` dan `LAIN-LAIN`.
+2. Hentikan kemas kini legasi buat sementara pada masa rekonsiliasi akhir.
+3. Selaras item baharu serta baki terkini ke eSTOR.
+4. Sahkan jumlah item, baki dan nilai stok.
+5. Tetapkan dan maklumkan tarikh go-live rasmi.
+
+### Selepas go-live
+
+1. ITU eSTOR menjadi sistem operasi tunggal.
+2. Tab legasi menjadi rujukan baca sahaja/arkib.
+3. Kemasukan berganda antara tab legasi dan eSTOR tidak dibenarkan.
+
+## Modul masih menunggu
+
+- [ ] Barang Keluar.
+- [ ] Permohonan, kelulusan dan penyerahan.
+- [ ] Sunting metadata item.
+- [ ] Nyahaktif/aktif semula item.
+- [ ] UI pengurusan pengguna dan peranan.
+- [ ] UI paparan audit.
+- [ ] Tetapan.
+- [ ] Laporan.
+- [ ] Rekonsiliasi akhir dan prosedur go-live.
+- [ ] Google OAuth keluar daripada status `Testing`.
+
+## Batasan teknikal
+
+Google Sheets tidak menyediakan transaksi atomik merentas kemas kini `TRANSACTIONS` dan append `AUDIT_LOG`. Strategi semasa tidak melaporkan kejayaan apabila audit gagal dan membenarkan pemulihan melalui retry. Walau bagaimanapun, dua penulisan pertama yang benar-benar serentak masih mempunyai tetingkap perlumbaan kecil. Penguncian kuat pada masa hadapan mungkin memerlukan Cloudflare Durable Objects atau D1.
+
+Kontrak endpoint: [API.md](API.md). Peraturan data: [DATA_MODEL.md](DATA_MODEL.md).

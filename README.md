@@ -1,82 +1,98 @@
 # ITU eSTOR
 
-ITU eSTOR ialah sistem pengurusan stok dan bekalan untuk **Institut Teknologi Unggas**. Frontend statik diterbitkan melalui GitHub Pages, Cloudflare Worker menyediakan API baca sahaja yang dilindungi, Supabase mengesahkan identiti Google, dan Google Sheets Native menyimpan data aplikasi.
+ITU eSTOR ialah sistem pengurusan stok dan bekalan Institut Teknologi Unggas. Frontend PWA diterbitkan melalui GitHub Pages, identiti Google disahkan oleh Supabase Auth, Cloudflare Worker menguatkuasakan kebenaran aplikasi, dan Google Sheets Native menyimpan data operasi.
 
-## Pautan pengeluaran
+## Pautan produksi
 
 - Frontend: <https://itumelaka.github.io/ituestor/>
-- Backend API: <https://ituestor-api.itumelaka.workers.dev>
+- API Worker: <https://ituestor-api.itumelaka.workers.dev>
 - Repositori: <https://github.com/itumelaka/ituestor>
+- Version ID Worker semasa: `4465e0f1-4687-4e48-82a2-2e710e5b6dfc`
 
-> **Status semasa — 30 Julai 2026:** Pengesahan dan kebenaran backend telah aktif di produksi. `/api/me` dan `/api/items` memerlukan token sesi Supabase yang sah serta rekod `USERS` berstatus `AKTIF` dengan peranan yang dibenarkan.
+> **Status disahkan — 3 Ogos 2026:** Daftar Item Baharu, Barang Masuk, pengiraan stok semasa, pintasan Tambah Stok, sejarah transaksi dan pembatalan transaksi telah aktif di produksi. Jumlah item produksi ialah 130.
 
 ## Seni bina semasa
 
 ```text
-GitHub Pages + PWA shell
+GitHub Pages + PWA
         |
-        | Google OAuth / sesi
-        v
-Supabase Auth
-        |
-        | Authorization: Bearer <token sesi>
+        | Google OAuth / sesi Supabase
         v
 Cloudflare Worker
         |-- sahkan token melalui Supabase /auth/v1/user
         |-- semak EMAIL, STATUS dan ROLE dalam USERS
-        |
+        |-- validasi, pengiraan, idempotensi dan audit
         v
-Google Sheets API (baca sahaja)
+Google Sheets API
+        |-- MASTER_ITEM
+        |-- TRANSACTIONS
         |-- USERS
-        `-- MASTER_ITEM
+        `-- AUDIT_LOG
 ```
 
-- **Identiti:** Google OAuth melalui Supabase Auth.
-- **Kebenaran aplikasi:** Worker memadankan e-mel yang disahkan dengan `USERS`.
-- **Peranan baca yang sah:** `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR`, `VIEWER`.
-- **Status wajib:** hanya `AKTIF` dibenarkan.
-- **Akses Google Sheets:** akaun perkhidmatan dengan skop baca sahaja.
+Frontend tidak mengakses Google Sheets secara terus. `MASTER_ITEM.STOK_AWAL` kekal sebagai garis dasar migrasi; semua pergerakan stok direkodkan dalam `TRANSACTIONS`.
 
-## Milestone pengeluaran 30 Julai 2026
+## Milestone produksi 3 Ogos 2026
 
-- Commit `fa49d9f` — `feat: enforce Supabase authorization in Worker`.
-- Commit `bbe111c` — `feat: add ITU eSTOR PWA branding`.
-- Version ID Worker: `e369d89f-6be3-46a0-a312-7a145aeb602f`.
-- `GET /health` kekal awam dan mengembalikan `200`.
-- `GET /api/me` dan `GET /api/items` tanpa token mengembalikan `401 AUTH_REQUIRED`.
-- Pengguna produksi `itumelaka@gmail.com` disahkan sebagai `ITU Melaka`, `SUPER_ADMIN`, `AKTIF`.
-- Kesemua **19/19** ujian Worker lulus.
-- Logo rasmi, manifest, service worker, favicon dan ikon PWA telah diterbitkan.
-- Shell statik boleh dimuatkan di luar talian; respons auth, API, bearer token dan data pengguna tidak dicache.
+| Commit | Milestone |
+|---|---|
+| `54640a7` | `feat: add Barang Masuk transaction flow` |
+| `51debd2` | `feat: add new inventory item registration` |
+| `6385007` | `feat: add current stock calculation and quick stock entry` |
+| `d8b0d1d` | `refactor: simplify Barang Masuk form` |
+| `4c74431` | `feat: add transaction history and cancellation` |
 
-## Data produksi disahkan
+Fungsi produksi yang lengkap:
 
-| Metrik | Nilai |
-|---|---:|
-| Jumlah item | 130 |
-| Nilai stok awal diketahui | RM2,334.40 |
-| Stok rendah | 0 |
-| Stok habis | 80 |
-| `ALAT TULIS` | 63 |
-| `BAHAN KIMIA` | 16 |
-| `HOUSE HOLD` | 40 |
-| `LAIN-LAIN` | 11 |
+- Daftar Item Baharu dengan ID kategori yang dijana Worker, semakan pendua dan audit.
+- Barang Masuk dengan medan Item, Kuantiti, Kos seunit dan Catatan pilihan.
+- Pengiraan `stokSemasa`, nilai semasa dan status stok daripada transaksi `SAH`.
+- Pintasan Tambah Stok daripada daftar serta modal item.
+- Register dan butiran transaksi sebenar.
+- Pembatalan tanpa pemadaman fizikal; hanya `STATUS` ditukar kepada `DIBATALKAN` dan audit `CANCEL` ditambah.
+- Dashboard dan daftar item dimuat semula selepas transaksi atau pembatalan disahkan oleh Worker.
 
-Kad permohonan dan transaksi kekal memaparkan `Belum aktif`.
+Ujian Worker terakhir: **82/82 lulus**. Suite Barang Masuk ringkas sebelumnya: **68/68 lulus**.
 
 ## Endpoint aktif
 
 | Kaedah | Laluan | Akses |
 |---|---|---|
 | `GET` | `/health` | Awam |
-| `GET` | `/api/me` | Token Supabase dan pengguna `USERS` yang dibenarkan |
-| `GET` | `/api/items` | Token Supabase dan pengguna `USERS` yang dibenarkan |
+| `GET` | `/api/me` | Semua pengguna `AKTIF` dengan peranan sah |
+| `GET` | `/api/items` | Semua empat peranan sah |
+| `POST` | `/api/items` | `SUPER_ADMIN`, `ADMIN_STOR` |
+| `POST` | `/api/transactions/in` | `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR` |
+| `GET` | `/api/transactions` | Semua empat peranan sah |
+| `POST` | `/api/transactions/:transactionId/cancel` | `SUPER_ADMIN`, `ADMIN_STOR` |
 
-Kontrak respons lengkap: [Dokumentasi API](docs/API.md).
+Kontrak lengkap: [Dokumentasi API](docs/API.md).
+
+## Pengiraan stok semasa
+
+```text
+STOK_SEMASA = STOK_AWAL + JUMLAH_MASUK - JUMLAH_KELUAR
+```
+
+Hanya transaksi `STATUS = SAH` dikira. `MASUK`, `PELARASAN_TAMBAH` dan `PULANGAN` menambah stok; `KELUAR`, `PELARASAN_TOLAK` dan `ROSAK_LUPUS` menolak stok. Transaksi `DIBATALKAN` kekal dalam sejarah tetapi tidak memberi kesan kepada stok.
+
+## Peralihan operasi
+
+ITU eSTOR belum dilepaskan secara rasmi kepada pegawai stor. Sehingga tarikh go-live ditetapkan, operasi kekal pada empat tab legasi: `BAHAN KIMIA`, `ALAT TULIS`, `HOUSE HOLD` dan `LAIN-LAIN`.
+
+Sebelum go-live, kemas kini legasi perlu dihentikan sementara untuk rekonsiliasi akhir, penyegerakan item serta baki terkini, dan pengesahan jumlah serta nilai stok. Selepas go-live, ITU eSTOR menjadi sistem operasi tunggal dan tab legasi menjadi rujukan baca sahaja/arkib. Elakkan kemasukan berganda antara kedua-dua sistem.
+
+## Batasan dan kerja seterusnya
+
+- Google OAuth masih berstatus `Testing`.
+- Barang Keluar belum aktif.
+- Permohonan, kelulusan dan penyerahan belum aktif.
+- Sunting metadata atau pengaktifan semula item belum aktif.
+- UI pengurusan pengguna/peranan, paparan audit, tetapan dan laporan belum aktif.
+- Penulisan status transaksi dan append audit di Google Sheets tidak atomik. Pemulihan retry telah dilaksanakan, tetapi penulisan pertama yang benar-benar serentak masih mempunyai tetingkap perlumbaan kecil; penguncian kuat pada masa hadapan mungkin memerlukan Durable Objects atau D1.
+- Rekonsiliasi akhir dan prosedur go-live rasmi masih perlu dilengkapkan.
 
 ## Pembangunan setempat
-
-Keperluan: Node.js dan npm yang serasi dengan `worker/package-lock.json`.
 
 ```powershell
 cd worker
@@ -85,26 +101,7 @@ npm run cf-typegen
 npm run dev
 ```
 
-`worker/.dev.vars` diperlukan untuk pembangunan setempat dan tidak boleh dimasukkan ke Git. Jangan merekodkan token, kunci peribadi atau rahsia perkhidmatan dalam kod atau dokumentasi.
-
-## Kawalan yang siap
-
-- Frontend dikunci tanpa sesi Supabase.
-- Token disahkan oleh Worker melalui endpoint rasmi Supabase.
-- E-mel dinormalkan dan disemak terhadap `USERS!A:Z`.
-- Pengguna tidak berdaftar, tidak aktif atau mempunyai peranan tidak sah ditolak.
-- `/api/items` bukan lagi endpoint awam.
-- CORS pengeluaran dan header `Authorization` disokong.
-- API Google Sheets kekal baca sahaja.
-- Ujian keselamatan dan akses Worker: 19/19 lulus.
-
-## Batasan semasa
-
-- Google OAuth masih berstatus `Testing`; hanya pengguna ujian yang dikonfigurasi boleh melengkapkan OAuth.
-- Tiada endpoint tulis aktif.
-- Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log dan pengurusan pengguna belum dilaksanakan.
-- Nilai stok dashboard masih berdasarkan `STOK_AWAL × KOS_SEUNIT`.
-- Pengiraan stok semasa daripada `TRANSACTIONS` belum aktif.
+`worker/.dev.vars` diperlukan secara setempat dan tidak boleh dimasukkan ke Git. Jangan rekod token, kunci peribadi atau rahsia perkhidmatan dalam kod atau dokumentasi.
 
 ## Dokumentasi
 

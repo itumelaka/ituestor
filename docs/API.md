@@ -2,53 +2,38 @@
 
 ## Status produksi
 
-API produksi ITU eSTOR ialah API baca sahaja yang dilindungi oleh Supabase Auth dan rekod kebenaran dalam Google Sheets `USERS`.
+**Base URL:** <https://ituestor-api.itumelaka.workers.dev>
 
-**Base URL**
-
-```text
-https://ituestor-api.itumelaka.workers.dev
-```
-
-**Version ID produksi — 30 Julai 2026**
+**Version ID Worker — 3 Ogos 2026:**
 
 ```text
-e369d89f-6be3-46a0-a312-7a145aeb602f
+4465e0f1-4687-4e48-82a2-2e710e5b6dfc
 ```
 
-## Pengesahan dan kebenaran
+Semua endpoint `/api/*` memerlukan token Supabase dan pengguna `USERS` yang aktif. `GET /health` sahaja bersifat awam.
 
-Endpoint dilindungi memerlukan header:
+## Pengesahan
 
 ```http
 Authorization: Bearer <Supabase access token>
 ```
 
-Aliran server:
+Worker mengesahkan token melalui Supabase `/auth/v1/user`, menormalkan e-mel, kemudian memadankannya dengan `EMAIL`, `STATUS = AKTIF` dan `ROLE` dalam `USERS!A:Z`. Metadata Google tidak digunakan sebagai bukti peranan.
 
-1. Worker menghantar token ke endpoint rasmi Supabase `/auth/v1/user`.
-2. Worker hanya menggunakan identiti yang berjaya disahkan.
-3. E-mel pengguna ditrim dan ditukar kepada huruf kecil.
-4. Worker membaca `USERS!A:Z` melalui aliran akaun perkhidmatan Google sedia ada.
-5. Baris `USERS` dipetakan menggunakan nama header, bukan kedudukan lajur.
-6. Akses diberikan hanya jika e-mel sepadan tepat, `STATUS = AKTIF`, dan `ROLE` dibenarkan.
+## Matriks endpoint dan peranan
 
-Peranan yang dibenarkan membaca endpoint semasa:
-
-- `SUPER_ADMIN`
-- `ADMIN_STOR`
-- `PEMBANTU_STOR`
-- `VIEWER`
-
-Token atau metadata profil Google tidak memberikan peranan secara automatik.
+| Endpoint | SUPER_ADMIN | ADMIN_STOR | PEMBANTU_STOR | VIEWER |
+|---|:---:|:---:|:---:|:---:|
+| `GET /api/me` | Ya | Ya | Ya | Ya |
+| `GET /api/items` | Ya | Ya | Ya | Ya |
+| `POST /api/items` | Ya | Ya | Tidak | Tidak |
+| `POST /api/transactions/in` | Ya | Ya | Ya | Tidak |
+| `GET /api/transactions` | Ya | Ya | Ya | Ya |
+| `POST /api/transactions/:transactionId/cancel` | Ya | Ya | Tidak | Tidak |
 
 ## `GET /health`
 
-Endpoint awam untuk status asas Worker. Ia tidak memerlukan token dan tidak membaca Google Sheets.
-
-### Respons produksi disahkan
-
-Status: `200 OK`
+Endpoint awam untuk kesihatan Worker.
 
 ```json
 {
@@ -61,158 +46,241 @@ Status: `200 OK`
 
 ## `GET /api/me`
 
-Endpoint dilindungi yang mengembalikan identiti aplikasi selepas token Supabase dan rekod `USERS` berjaya disahkan. Frontend memanggil endpoint ini sebelum memuatkan inventori.
-
-### Permintaan
-
-```http
-GET /api/me HTTP/1.1
-Host: ituestor-api.itumelaka.workers.dev
-Authorization: Bearer <Supabase access token>
-```
-
-### Respons berjaya
-
-Status: `200 OK`
+Mengembalikan identiti dan peranan aplikasi yang telah disahkan.
 
 ```json
 {
   "success": true,
   "user": {
-    "userId": "<ID pengguna>",
-    "nama": "ITU Melaka",
-    "email": "itumelaka@gmail.com",
+    "userId": "<USER_ID>",
+    "nama": "<NAMA>",
+    "email": "<EMAIL>",
     "role": "SUPER_ADMIN",
     "status": "AKTIF"
   }
 }
 ```
 
-Respons ini digunakan untuk nama paparan rasmi dan peranan aplikasi. Ia tidak mengembalikan token atau rahsia.
-
 ## `GET /api/items`
 
-Endpoint dilindungi yang membaca `MASTER_ITEM!A:Z` selepas kebenaran pengguna berjaya. Semua empat peranan sah boleh membaca item.
+Membaca `MASTER_ITEM` dan `TRANSACTIONS`. Hanya transaksi `STATUS = SAH` dikira.
 
-### Permintaan
+Medan stok terhitung yang ditambah pada setiap item:
+
+| Medan | Maksud |
+|---|---|
+| `jumlahMasuk` | Jumlah transaksi tambah yang sah |
+| `jumlahKeluar` | Jumlah transaksi tolak yang sah |
+| `stokSemasa` | `stokAwal + jumlahMasuk - jumlahKeluar` |
+| `nilaiStokSemasa` | `stokSemasa × kosSeunit` |
+| `statusStok` | `HABIS`, `RENDAH` atau `TERSEDIA` |
+
+Status stok:
+
+- `HABIS` apabila `stokSemasa <= 0`;
+- `RENDAH` apabila `stokSemasa > 0` dan `stokSemasa <= stokMinimum`;
+- `TERSEDIA` bagi keadaan lain.
+
+Respons produksi semasa mempunyai `count: 130`. `MASTER_ITEM.STOK_AWAL` tidak diubah oleh transaksi.
+
+## `POST /api/items`
+
+Mendaftar item baharu. Hanya `SUPER_ADMIN` dan `ADMIN_STOR` dibenarkan.
+
+Header tambahan:
 
 ```http
-GET /api/items HTTP/1.1
-Host: ituestor-api.itumelaka.workers.dev
-Authorization: Bearer <Supabase access token>
+Idempotency-Key: <UUID>
+Content-Type: application/json
 ```
 
-### Respons berjaya
+Permintaan:
 
-Status: `200 OK`
+```json
+{
+  "kategori": "ALAT TULIS",
+  "namaItem": "<nama item>",
+  "unit": "UNIT",
+  "kosSeunit": 0,
+  "stokMinimum": 0
+}
+```
 
-Respons produksi disahkan mengandungi `count: 130` dan 130 objek dalam `items`.
+Worker:
+
+- menjana `ITEM_ID` menggunakan `AT-`, `BK-`, `HH-` atau `LL-`;
+- menetapkan `STOK_AWAL = 0`, `STATUS = AKTIF`, `SUMBER_TAB = NEW_ITEM` dan `SUMBER_BARIS = 0`;
+- mengesan pendua berdasarkan kategori, nama dan unit yang dinormalisasi;
+- menambah audit penciptaan;
+- menggunakan kunci idempotensi untuk retry selamat.
+
+Respons berjaya menggunakan status `201`, atau `200` bagi replay yang disahkan:
 
 ```json
 {
   "success": true,
-  "sheet": "MASTER_ITEM",
-  "count": 130,
-  "items": [
+  "replayed": false,
+  "item": {
+    "itemId": "<ITEM_ID>",
+    "kategori": "ALAT TULIS",
+    "namaItem": "<nama item>",
+    "unit": "UNIT",
+    "kosSeunit": 0,
+    "stokAwal": 0,
+    "stokMinimum": 0,
+    "status": "AKTIF"
+  }
+}
+```
+
+## `POST /api/transactions/in`
+
+Merekod Barang Masuk. `SUPER_ADMIN`, `ADMIN_STOR` dan `PEMBANTU_STOR` dibenarkan; `VIEWER` ditolak.
+
+Header `Idempotency-Key` UUID diperlukan. Permintaan frontend semasa:
+
+```json
+{
+  "itemId": "<ITEM_ID>",
+  "kuantiti": 1,
+  "kosSeunit": 0,
+  "catatan": ""
+}
+```
+
+`catatan` ialah pilihan. Medan lama `pihakTerlibat`, `bahagian` dan `tujuan` masih diterima untuk keserasian klien lama tetapi tidak diwajibkan. Jika diabaikan, `PIHAK_TERLIBAT`, `BAHAGIAN` dan `TUJUAN` disimpan sebagai rentetan kosong; skema `TRANSACTIONS` tidak berubah.
+
+Worker menetapkan `JENIS = MASUK`, `STATUS = SAH`, cap masa dan identiti pencipta, serta mengira `JUMLAH_NILAI`. Baris `TRANSACTIONS` dan `AUDIT_LOG` ditambah tanpa mengubah `MASTER_ITEM.STOK_AWAL`.
+
+```json
+{
+  "success": true,
+  "replayed": false,
+  "transaction": {
+    "transactionId": "<TRANSACTION_ID>",
+    "itemId": "<ITEM_ID>",
+    "jenis": "MASUK",
+    "kuantiti": 1,
+    "kosSeunit": 0,
+    "jumlahNilai": 0,
+    "pihakTerlibat": "",
+    "bahagian": "",
+    "tujuan": "",
+    "catatan": "",
+    "status": "SAH"
+  }
+}
+```
+
+## `GET /api/transactions`
+
+Semua empat peranan sah boleh membaca sejarah transaksi. Respons disusun terbaru dahulu dan diperkaya dengan nama item, kategori serta unit daripada `MASTER_ITEM`. Rujukan item yang tidak lagi diketahui kekal dipaparkan dengan fallback selamat.
+
+Parameter pilihan:
+
+| Parameter | Fungsi |
+|---|---|
+| `search` | Carian ID transaksi, item, pencipta atau catatan |
+| `status` | Penapis status tepat |
+| `jenis` | Penapis jenis transaksi tepat |
+| `itemId` | Penapis item tepat |
+| `limit` | Had hasil; maksimum selamat 500 |
+
+```json
+{
+  "success": true,
+  "count": 1,
+  "total": 1,
+  "matched": 1,
+  "limit": 200,
+  "summary": {
+    "todaySah": 1
+  },
+  "transactions": [
     {
+      "transactionId": "<TRANSACTION_ID>",
+      "timestamp": "<ISO 8601>",
       "itemId": "<ITEM_ID>",
-      "kategori": "<KATEGORI>",
-      "namaItem": "<NAMA_ITEM>",
-      "namaItemAsal": "<NAMA_ITEM_ASAL>",
-      "unit": "<UNIT>",
-      "kosSeunit": 0,
-      "stokAwal": 0,
-      "stokMinimum": 0,
-      "status": "AKTIF",
-      "sumberTab": "<SUMBER_TAB>",
-      "sumberBaris": 0,
-      "createdAt": "<CREATED_AT>",
-      "updatedAt": "<UPDATED_AT>"
+      "itemName": "<nama item>",
+      "kategori": "<kategori>",
+      "unit": "<unit>",
+      "jenis": "MASUK",
+      "kuantiti": 1,
+      "jumlahNilai": 0,
+      "createdByName": "<nama>",
+      "createdByEmail": "<e-mel>",
+      "status": "SAH"
     }
   ]
 }
 ```
 
-Nilai contoh menerangkan bentuk respons sahaja dan bukan rekod inventori tertentu.
+`summary.todaySah` menggunakan zon `Asia/Kuala_Lumpur` dan mengecualikan transaksi `DIBATALKAN`.
 
-### Jenis medan item
+## `POST /api/transactions/:transactionId/cancel`
 
-| Medan | Jenis JSON | Catatan |
-|---|---|---|
-| `itemId` | string | ID item unik |
-| `kategori` | string | Kategori inventori |
-| `namaItem` | string | Nama dinormalisasi |
-| `namaItemAsal` | string | Nama asal migrasi |
-| `unit` | string | Unit atau kemasan |
-| `kosSeunit` | number | Nilai RM tanpa simbol mata wang |
-| `stokAwal` | number | Kuantiti awal migrasi |
-| `stokMinimum` | number | Paras amaran |
-| `status` | string | Status rekod item |
-| `sumberTab` | string | Tab legasi asal |
-| `sumberBaris` | number | Nombor baris fizikal sumber |
-| `createdAt` | string | Cap masa penciptaan |
-| `updatedAt` | string | Cap masa kemas kini |
-
-## Respons ralat pengesahan
-
-### Token tiada
-
-Respons produksi disahkan untuk `/api/me` dan `/api/items`:
-
-Status: `401 Unauthorized`
+Hanya `SUPER_ADMIN` dan `ADMIN_STOR` boleh membatalkan transaksi `SAH`.
 
 ```json
 {
-  "success": false,
-  "error": "AUTH_REQUIRED",
-  "message": "Log masuk diperlukan."
+  "sebab": "Sebab pembatalan sekurang-kurangnya 5 aksara"
 }
 ```
 
-### Token tidak sah atau tamat
-
-Status: `401 Unauthorized`
+Worker tidak memadam baris. Hanya sel `STATUS` ditukar kepada `DIBATALKAN`; medan transaksi lain dikekalkan. Audit `ACTION = CANCEL`, `MODULE = TRANSACTION` menyimpan ringkasan sebelum/selepas dan sebab pembatalan.
 
 ```json
 {
-  "success": false,
-  "error": "INVALID_TOKEN",
-  "message": "Sesi tidak sah atau telah tamat."
+  "success": true,
+  "replayed": false,
+  "transaction": {
+    "transactionId": "<TRANSACTION_ID>",
+    "itemId": "<ITEM_ID>",
+    "jenis": "MASUK",
+    "kuantiti": 1,
+    "kosSeunit": 0,
+    "jumlahNilai": 0,
+    "status": "DIBATALKAN",
+    "cancelledByEmail": "<e-mel>",
+    "cancelledByName": "<nama>",
+    "sebab": "<sebab>"
+  }
 }
 ```
 
-### Kebenaran pengguna ditolak
+Retry dengan sebab yang sama boleh mengembalikan `replayed: true`. Jika status telah berubah tetapi audit belum berjaya ditambah, retry memulihkan audit sebelum melaporkan kejayaan. Sebab berbeza selepas pembatalan lengkap tidak menghasilkan audit kedua.
+
+## Respons ralat utama
 
 | Status | Kod | Keadaan |
 |---:|---|---|
-| `403` | `EMAIL_REQUIRED` | Identiti yang disahkan tiada e-mel yang boleh digunakan |
+| `400` | `INVALID_JSON` | Badan JSON tidak sah |
+| `400` | `VALIDATION_ERROR` | Input tidak memenuhi peraturan |
+| `400` | `INVALID_IDEMPOTENCY_KEY` | UUID idempotensi tiada/tidak sah |
+| `401` | `AUTH_REQUIRED` | Header bearer tiada |
+| `401` | `INVALID_TOKEN` | Token tidak sah atau tamat |
 | `403` | `USER_NOT_REGISTERED` | E-mel tiada dalam `USERS` |
-| `403` | `USER_INACTIVE` | `STATUS` bukan `AKTIF` |
-| `403` | `ROLE_NOT_ALLOWED` | `ROLE` bukan salah satu peranan yang dibenarkan |
+| `403` | `USER_INACTIVE` | Pengguna bukan `AKTIF` |
+| `403` | `ROLE_NOT_ALLOWED` | Peranan tidak dibenarkan untuk operasi |
+| `404` | `ITEM_NOT_FOUND` | Item tidak ditemui |
+| `404` | `TRANSACTION_NOT_FOUND` | Transaksi tidak ditemui |
+| `409` | `ITEM_ALREADY_EXISTS` | Item ternormalisasi telah wujud |
+| `409` | `IDEMPOTENCY_CONFLICT` | Kunci digunakan bagi payload berbeza |
+| `409` | `TRANSACTION_ALREADY_CANCELLED` | Transaksi telah dibatalkan |
+| `409` | `TRANSACTION_NOT_CANCELLABLE` | Status bukan `SAH` |
+| `409` | `CANCELLATION_CONFLICT` | Perubahan serentak dikesan |
+| `500` | `WRITE_FAILED` | Penulisan atau audit tidak dapat disahkan |
 
 Respons tidak mendedahkan token, respons mentah pembekal atau stack trace.
 
-## CORS
+## Konsistensi dan idempotensi
 
-Origin frontend produksi `https://itumelaka.github.io` dibenarkan. Kaedah semasa ialah `GET` dan `OPTIONS`, dan `Access-Control-Allow-Headers` merangkumi `Authorization`.
+Google Sheets tidak menyediakan transaksi atomik merentas kemas kini status dan append audit. Worker tidak melaporkan kejayaan apabila audit gagal dan menyediakan pemulihan retry dengan ID audit deterministik. Tetingkap perlumbaan kecil masih wujud bagi penulisan pertama yang benar-benar serentak; penguncian kuat pada masa hadapan mungkin menggunakan Durable Objects atau D1.
 
-## Ujian Worker
+Tiada endpoint pemadaman fizikal transaksi. Kaedah atau laluan lain yang tidak disokong mengembalikan `404 NOT_FOUND`.
 
-Pada 30 Julai 2026, **19 daripada 19** ujian lulus. Liputan merangkumi:
+## Ujian
 
-- health awam;
-- token tiada dan token tidak sah;
-- akses sah ke `/api/me` dan `/api/items`;
-- pengguna tidak aktif;
-- pengguna tidak berdaftar;
-- peranan tidak sah;
-- transformasi 130 item;
-- CORS dan respons ralat selamat.
-
-Semua panggilan Supabase dan Google Sheets dalam ujian menggunakan mock; tiada token sebenar atau rangkaian produksi digunakan.
-
-## Laluan lain dan batasan
-
-Laluan atau kaedah yang tidak disokong mengembalikan `404 NOT_FOUND`.
-
-Tiada endpoint `POST`, `PUT`, `PATCH` atau `DELETE`. Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log, pengurusan pengguna dan operasi tulis belum tersedia. Nilai stok dashboard masih berdasarkan `STOK_AWAL × KOS_SEUNIT`; pengiraan daripada `TRANSACTIONS` belum aktif.
+- Suite Barang Masuk ringkas: **68/68 lulus**.
+- Suite akhir sejarah dan pembatalan transaksi: **82/82 lulus**.
+- Semua panggilan Supabase dan Google Sheets dalam ujian menggunakan mock; tiada rangkaian atau penulisan produksi.

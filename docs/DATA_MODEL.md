@@ -20,18 +20,18 @@ Enam tab pengeluaran kini telah diwujudkan dalam spreadsheet yang sama:
 - `AUDIT_LOG`
 - `SETTINGS`
 
-Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod yang direkonsiliasi. `MASTER_ITEM` didedahkan melalui endpoint baca sahaja yang dilindungi, `GET /api/items`. `USERS` dibaca secara dalaman oleh Worker untuk kebenaran dan tidak didedahkan sebagai senarai pengguna. Tab pengeluaran lain belum mempunyai endpoint fungsi.
+Migrasi `MASTER_ITEM` telah selesai dengan 130 rekod produksi yang direkonsiliasi. `GET /api/items` membaca `MASTER_ITEM` dan `TRANSACTIONS` untuk menghasilkan baki semasa. `TRANSACTIONS` menyokong Barang Masuk, sejarah dan pembatalan, manakala `AUDIT_LOG` menerima audit penciptaan item, transaksi dan pembatalan. `USERS` dibaca secara dalaman untuk kebenaran dan tidak didedahkan sebagai senarai pengguna.
 
-GitHub Pages tidak membaca atau mengubah Google Sheet secara terus. Sejak 30 Julai 2026, Worker produksi mengesahkan token Supabase, menormalkan e-mel, dan memadankannya dengan `EMAIL`, `STATUS` serta `ROLE` dalam `USERS`. Hanya pengguna `AKTIF` dengan peranan `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR` atau `VIEWER` boleh membaca `/api/me` dan `/api/items`. Operasi tulis dan pengiraan stok berasaskan transaksi masih belum dilaksanakan.
+GitHub Pages tidak membaca atau mengubah Google Sheet secara terus. Worker produksi mengesahkan token Supabase, menormalkan e-mel, dan memadankannya dengan `EMAIL`, `STATUS` serta `ROLE` dalam `USERS`. Sejak 3 Ogos 2026, operasi item dan transaksi yang aktif turut dikuatkuasakan mengikut peranan khusus.
 
 Semua cap masa menggunakan zon `Asia/Kuala_Lumpur`, mata wang ialah Ringgit Malaysia (RM), dan alamat e-mel disimpan dalam huruf kecil.
 
 ## 2. Prinsip teras
 
 1. `MASTER_ITEM` menyimpan definisi item dan stok awal migrasi, bukan baki stok semasa yang boleh diedit.
-2. Stok semasa akan dikira daripada `STOK_AWAL` dan transaksi berstatus sah apabila modul transaksi dilaksanakan.
-3. Baris transaksi yang telah dimuktamadkan tidak boleh diubah atau dipadam.
-4. Pembetulan transaksi dibuat melalui transaksi pelarasan baharu.
+2. Stok semasa dikira daripada `STOK_AWAL` dan transaksi berstatus `SAH`.
+3. Baris transaksi yang telah dimuktamadkan tidak boleh dipadam. Pembatalan terkawal hanya mengubah sel `STATUS` kepada `DIBATALKAN`.
+4. Pembetulan lain dibuat melalui transaksi pelarasan baharu.
 5. Rekod operasi menggunakan *soft deletion* melalui `STATUS`, bukan pemadaman fizikal.
 6. Semua tindakan penting mesti boleh dijejaki melalui `AUDIT_LOG`.
 7. Nilai asal migrasi mesti kekal boleh dirujuk melalui medan sumber.
@@ -49,7 +49,7 @@ STOK_SEMASA =
   - ROSAK_LUPUS
 ```
 
-Apabila modul transaksi dilaksanakan, hanya transaksi dengan `STATUS = SAH` akan diambil kira. Kuantiti disimpan sebagai nombor positif; kesan tambah atau tolak ditentukan oleh `JENIS`. Formula ini ialah reka bentuk sasaran dan belum digunakan oleh Worker pengeluaran semasa.
+Hanya transaksi dengan `STATUS = SAH` diambil kira. Kuantiti disimpan sebagai nombor positif; kesan tambah atau tolak ditentukan oleh `JENIS`. Transaksi `DIBATALKAN` kekal dalam lejar tetapi kesannya dikeluarkan daripada pengiraan.
 
 ## 3. Ringkasan hubungan
 
@@ -143,8 +143,8 @@ Jenis transaksi yang dibenarkan:
 
 ### Validasi dan hubungan
 
-- Baris berstatus `SAH` bersifat *immutable*.
-- Pembatalan tidak memadam baris; tandakan `DIBATALKAN` dan rekodkan sebab dalam audit.
+- Baris berstatus `SAH` tidak boleh disunting secara umum. Endpoint pembatalan khusus hanya dibenarkan mengubah sel `STATUS`.
+- Pembatalan tidak memadam baris; `STATUS` ditukar kepada `DIBATALKAN` dan sebab direkodkan dalam audit `CANCEL / TRANSACTION`.
 - `KELUAR`, `PELARASAN_TOLAK` dan `ROSAK_LUPUS` tidak boleh menyebabkan stok negatif.
 - `JUMLAH_NILAI` dikira oleh backend, bukan dipercayai daripada input klien.
 - `ITEM_ID` merujuk `MASTER_ITEM`; `CREATED_BY_EMAIL` merujuk pengguna aktif.
@@ -309,15 +309,16 @@ Menyimpan konfigurasi ringkas aplikasi dalam bentuk pasangan kunci-nilai.
 
 | Tindakan | SUPER_ADMIN | ADMIN_STOR | PEMBANTU_STOR | VIEWER |
 |---|:---:|:---:|:---:|:---:|
-| Lihat stok/laporan | Ya | Ya | Ya | Ya |
-| Daftar/kemas kini item | Ya | Ya | Terhad | Tidak |
-| Cipta transaksi | Ya | Ya | Ya | Tidak |
-| Sahkan/pelarasan transaksi | Ya | Ya | Terhad | Tidak |
-| Lulus permohonan | Ya | Ya | Tidak | Tidak |
-| Urus pengguna/peranan | Ya | Tidak | Tidak | Tidak |
-| Ubah tetapan kritikal | Ya | Tidak | Tidak | Tidak |
+| Lihat profil, item dan transaksi | Ya | Ya | Ya | Ya |
+| Daftar item baharu | Ya | Ya | Tidak | Tidak |
+| Rekod Barang Masuk / Tambah Stok | Ya | Ya | Ya | Tidak |
+| Batalkan transaksi `SAH` | Ya | Ya | Tidak | Tidak |
+| Barang Keluar | Belum aktif | Belum aktif | Belum aktif | Belum aktif |
+| Lulus permohonan | Belum aktif | Belum aktif | Belum aktif | Belum aktif |
+| Urus pengguna/peranan | Belum aktif | Belum aktif | Belum aktif | Belum aktif |
+| Ubah tetapan kritikal | Belum aktif | Belum aktif | Belum aktif | Belum aktif |
 
-Kebenaran baca bagi semua empat peranan telah dikuatkuasakan. Baris operasi tulis dalam matriks ini ialah reka bentuk sasaran dan mesti dikuatkuasakan serta diuji apabila endpoint berkaitan dibina.
+Kebenaran di atas dikuatkuasakan oleh Worker selepas pengesahan token, `STATUS = AKTIF` dan padanan peranan. Baris `Belum aktif` bukan kebenaran tersirat dan tidak boleh dilaksanakan tanpa endpoint, validasi, audit dan ujian khusus.
 
 ### Larangan suntingan stok terus
 
@@ -337,29 +338,50 @@ Audit diwajibkan untuk:
 - perubahan tetapan;
 - cubaan akses yang ditolak bagi tindakan sensitif.
 
-## 11. Status pelaksanaan dan urutan seterusnya
+## 11. Konsistensi penulisan Google Sheets
 
-Selesai dan disahkan pada 30 Julai 2026:
+Penciptaan item dan Barang Masuk menggunakan kunci idempotensi untuk retry selamat. Pembatalan transaksi menggunakan ID audit deterministik supaya cubaan semula boleh melengkapkan audit apabila sel `STATUS` telah berubah tetapi append audit sebelumnya gagal.
 
-1. Empat tab legasi dikekalkan tanpa perubahan.
-2. Enam tab pengeluaran telah diwujudkan.
-3. `MASTER_ITEM` telah dimigrasikan dan direkonsiliasi kepada 130 item.
-4. Cloudflare Worker membaca semua item melalui Google Sheets API dengan akses Viewer dan skop baca sahaja.
-5. Supabase Google Auth mengunci frontend tanpa sesi dan memulihkan sesi pengguna.
-6. Frontend menghantar bearer token kepada Worker.
-7. Worker mengesahkan token melalui Supabase dan menyemak e-mel, `STATUS = AKTIF` serta peranan dalam `USERS`.
-8. `/api/me` dan `/api/items` dilindungi; pengguna tidak berdaftar, tidak aktif atau mempunyai peranan tidak sah ditolak.
-9. Pengguna produksi `itumelaka@gmail.com` disahkan sebagai `ITU Melaka`, `SUPER_ADMIN`, `AKTIF`.
-10. Nilai stok diketahui masih berdasarkan `STOK_AWAL` sehingga lejar transaksi diaktifkan.
+Google Sheets tidak menyediakan transaksi atomik merentas dua tab. Oleh itu:
+
+- Worker tidak melaporkan kejayaan jika audit wajib gagal;
+- retry membaca semula keadaan semasa dan memulihkan audit yang hilang;
+- penulisan pertama yang benar-benar serentak masih mempunyai tetingkap perlumbaan kecil;
+- penguncian kuat pada masa hadapan mungkin memerlukan Cloudflare Durable Objects atau D1.
+
+## 12. Peralihan operasi tab legasi
+
+ITU eSTOR belum dilepaskan secara rasmi kepada pegawai stor. Sebelum go-live:
+
+1. operasi diteruskan pada `BAHAN KIMIA`, `ALAT TULIS`, `HOUSE HOLD` dan `LAIN-LAIN`;
+2. hentikan kemas kini tab legasi sementara ketika rekonsiliasi akhir;
+3. selaras item baharu dan baki terkini;
+4. sahkan jumlah item, baki serta nilai stok;
+5. tetapkan tarikh go-live rasmi.
+
+Selepas go-live, ITU eSTOR menjadi sistem operasi tunggal. Empat tab legasi menjadi rujukan baca sahaja/arkib. Kemasukan berganda antara tab legasi dan eSTOR mesti dielakkan.
+
+## 13. Status pelaksanaan dan urutan seterusnya
+
+Selesai dan disahkan pada 3 Ogos 2026:
+
+1. `MASTER_ITEM` direkonsiliasi kepada 130 item produksi.
+2. Pengesahan Supabase dan kebenaran berasaskan `USERS` aktif.
+3. Daftar Item Baharu aktif dengan ID kategori, semakan pendua, idempotensi dan audit.
+4. Barang Masuk aktif dengan identiti, masa, jumlah nilai dan status yang ditetapkan Worker.
+5. Pengiraan stok semasa menggunakan transaksi `SAH` bagi keenam-enam jenis transaksi.
+6. Dashboard, daftar item, butiran item dan pintasan Tambah Stok menggunakan baki semasa.
+7. Sejarah serta butiran transaksi aktif.
+8. Pembatalan transaksi aktif tanpa pemadaman fizikal dan dengan audit pemulihan.
+9. Suite akhir Worker lulus 82/82.
+
+Rekod ujian produksi `TXN-2B7808B76CBEA4CA9FEF3E1A` untuk `LL-0006` Bateri D telah dibatalkan dan diaudit. Ia ialah rekod pengesahan produksi, bukan stok operasi biasa; kesan stok 10 unit dan RM30.00 telah dikeluarkan, menjadikan baki semula 0, nilai RM0.00 dan status `HABIS`.
 
 Kerja seterusnya:
 
-1. Laksanakan endpoint `TRANSACTIONS` serta pengiraan stok semasa.
-2. Laksanakan Barang Masuk dan Barang Keluar.
-3. Laksanakan aliran `REQUESTS`, kelulusan dan penyerahan.
-4. Laksanakan `AUDIT_LOG`, pengurusan pengguna dan operasi tetapan.
-5. Takrif dan uji kebenaran khusus bagi setiap operasi tulis.
-6. Hadkan semua operasi tulis kepada Cloudflare Worker.
-7. Aktifkan operasi tulis hanya selepas validasi data, audit dan ujian keselamatan selesai.
-
-Barang Masuk, Barang Keluar, Permohonan, Kelulusan, Audit Log dan pengurusan pengguna belum aktif.
+1. Barang Keluar.
+2. Permohonan, kelulusan dan penyerahan.
+3. Sunting metadata serta nyahaktif/aktif semula item.
+4. UI pengguna/peranan, audit, tetapan dan laporan.
+5. Rekonsiliasi akhir dan prosedur go-live.
+6. Penerbitan Google OAuth keluar daripada status `Testing`.
