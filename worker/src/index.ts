@@ -27,6 +27,13 @@ const ALLOWED_ROLES = new Set([
 	"VIEWER",
 ]);
 const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]);
+const CREATE_ITEM_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
+const CATEGORY_PREFIXES = new Map([
+	["ALAT TULIS", "AT"],
+	["BAHAN KIMIA", "BK"],
+	["HOUSE HOLD", "HH"],
+	["LAIN-LAIN", "LL"],
+]);
 const MAX_JSON_BODY_BYTES = 16 * 1024;
 const IDEMPOTENCY_KEY_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -84,11 +91,28 @@ interface TransactionResult {
 	status: "SAH";
 }
 
+interface CreateItemPayload {
+	kategori: string;
+	namaItem: string;
+	unit: string;
+	kosSeunit: number;
+	stokMinimum: number;
+}
+
+interface CreatedItemResult extends CreateItemPayload {
+	itemId: string;
+	stokAwal: 0;
+	status: "AKTIF";
+	createdAt: string;
+	updatedAt: string;
+}
+
 class ApiError extends Error {
 	constructor(
 		readonly status: number,
 		readonly code: string,
 		message: string,
+		readonly details?: Record<string, unknown>,
 	) {
 		super(message);
 	}
@@ -125,6 +149,7 @@ function errorResponse(error: ApiError): Response {
 			success: false,
 			error: error.code,
 			message: error.message,
+			...(error.details ?? {}),
 		},
 		{ status: error.status },
 	);
@@ -407,6 +432,74 @@ function validateIncomingTransaction(value: unknown): IncomingTransactionPayload
 	};
 }
 
+function normalizeSpaces(value: string): string {
+	return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+
+function normalizedLookupText(value: unknown): string {
+	return normalizeSpaces(String(value ?? "")).toLocaleLowerCase("ms");
+}
+
+function strictNonNegativeNumber(
+	value: unknown,
+	fieldName: string,
+	maximum: number,
+	requireTwoDecimals = false,
+): number {
+	if (
+		(typeof value !== "number" && typeof value !== "string") ||
+		(typeof value === "string" && !/^\d+(?:\.\d+)?$/.test(value.trim()))
+	) {
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	const number = Number(value);
+	if (
+		!Number.isFinite(number) ||
+		number < 0 ||
+		number > maximum ||
+		(requireTwoDecimals && Math.abs(number * 100 - Math.round(number * 100)) > 1e-8)
+	) {
+		throw new ApiError(400, "VALIDATION_ERROR", `${fieldName} tidak sah.`);
+	}
+	return number;
+}
+
+function validateCreateItem(value: unknown): CreateItemPayload {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat item tidak sah.");
+	}
+	const body = value as Record<string, unknown>;
+	const categoryInput = requiredText(body.kategori, "Kategori", 40);
+	const kategori = normalizeSpaces(categoryInput).toLocaleUpperCase("ms");
+	if (!CATEGORY_PREFIXES.has(kategori)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Kategori tidak sah.");
+	}
+
+	const namaItem = normalizeSpaces(requiredText(body.namaItem, "Nama item", 160));
+	const unit = normalizeSpaces(requiredText(body.unit, "Unit", 40))
+		.toLocaleUpperCase("ms");
+	if (/[\u0000-\u001F\u007F]/.test(namaItem) || /[\u0000-\u001F\u007F]/.test(unit)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat teks tidak sah.");
+	}
+
+	return {
+		kategori,
+		namaItem,
+		unit,
+		kosSeunit: strictNonNegativeNumber(
+			body.kosSeunit,
+			"Kos seunit",
+			1_000_000_000,
+			true,
+		),
+		stokMinimum: strictNonNegativeNumber(
+			body.stokMinimum,
+			"Stok minimum",
+			1_000_000_000,
+		),
+	};
+}
+
 function idempotencyKey(request: Request): string {
 	const key = request.headers.get("Idempotency-Key")?.trim() ?? "";
 	if (!IDEMPOTENCY_KEY_PATTERN.test(key)) {
@@ -420,9 +513,8 @@ function idempotencyKey(request: Request): string {
 }
 
 async function stableId(prefix: "TXN" | "AUD", key: string): Promise<string> {
-	// ID deterministik menjadikan TRANSACTIONS/AUDIT_LOG sendiri sebagai stor
-	// idempotensi kekal. Retry membaca ID ini semula; jika audit terdahulu gagal,
-	// hanya audit ditambah supaya transaksi stok tidak digandakan.
+	// ID deterministik menjadikan helaian pengeluaran sebagai stor idempotensi
+	// kekal tanpa bergantung pada memori Worker.
 	const digest = await crypto.subtle.digest(
 		"SHA-256",
 		new TextEncoder().encode(`${prefix}:${key}`),
@@ -431,6 +523,127 @@ async function stableId(prefix: "TXN" | "AUD", key: string): Promise<string> {
 		byte.toString(16).padStart(2, "0")
 	).join("").toUpperCase();
 	return `${prefix}-${suffix}`;
+}
+
+function itemRecord(result: CreatedItemResult): Record<string, string | number> {
+	// Rekod ciptaan aplikasi menggunakan konvensyen sumber NEW_ITEM / 0;
+	// tab dan baris legasi tidak disentuh.
+	return {
+		ITEM_ID: result.itemId,
+		KATEGORI: result.kategori,
+		NAMA_ITEM: result.namaItem,
+		NAMA_ITEM_ASAL: result.namaItem,
+		UNIT: result.unit,
+		KOS_SEUNIT: result.kosSeunit,
+		STOK_AWAL: 0,
+		STOK_MINIMUM: result.stokMinimum,
+		STATUS: "AKTIF",
+		SUMBER_TAB: "NEW_ITEM",
+		SUMBER_BARIS: 0,
+		CREATED_AT: result.createdAt,
+		UPDATED_AT: result.updatedAt,
+	};
+}
+
+function publicItemResult(result: CreatedItemResult) {
+	return {
+		itemId: result.itemId,
+		kategori: result.kategori,
+		namaItem: result.namaItem,
+		unit: result.unit,
+		kosSeunit: result.kosSeunit,
+		stokAwal: result.stokAwal,
+		stokMinimum: result.stokMinimum,
+		status: result.status,
+		createdAt: result.createdAt,
+		updatedAt: result.updatedAt,
+	};
+}
+
+function itemMatchesPayload(
+	record: Record<string, string>,
+	payload: CreateItemPayload,
+): boolean {
+	return normalizedLookupText(record.NAMA_ITEM) === normalizedLookupText(payload.namaItem) &&
+		normalizeSpaces(record.KATEGORI).toLocaleUpperCase("ms") === payload.kategori &&
+		normalizeSpaces(record.UNIT).toLocaleUpperCase("ms") === payload.unit;
+}
+
+function createdItemMatches(
+	record: Record<string, string>,
+	result: CreatedItemResult,
+): boolean {
+	return record.ITEM_ID === result.itemId &&
+		itemMatchesPayload(record, result) &&
+		Number(record.KOS_SEUNIT) === result.kosSeunit &&
+		Number(record.STOK_AWAL) === 0 &&
+		Number(record.STOK_MINIMUM) === result.stokMinimum &&
+		String(record.STATUS ?? "").trim().toUpperCase() === "AKTIF";
+}
+
+function existingItemSummary(record: Record<string, string>) {
+	return {
+		itemId: record.ITEM_ID,
+		kategori: record.KATEGORI,
+		namaItem: record.NAMA_ITEM,
+		unit: record.UNIT,
+		status: record.STATUS,
+	};
+}
+
+function nextItemId(records: Array<Record<string, string>>, prefix: string): string {
+	const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+	let maximum = 0;
+	const existingIds = new Set(records.map((record) => record.ITEM_ID));
+	for (const record of records) {
+		const match = String(record.ITEM_ID ?? "").trim().match(pattern);
+		if (!match) continue;
+		const sequence = Number(match[1]);
+		if (Number.isSafeInteger(sequence)) maximum = Math.max(maximum, sequence);
+	}
+
+	let next = maximum + 1;
+	while (next <= 9999) {
+		const candidate = `${prefix}-${String(next).padStart(4, "0")}`;
+		if (!existingIds.has(candidate)) return candidate;
+		next += 1;
+	}
+	throw new ApiError(500, "WRITE_FAILED", "ID item baharu tidak dapat dijana.");
+}
+
+function parseCreatedItemAudit(record: Record<string, string>): CreatedItemResult | null {
+	try {
+		const value = JSON.parse(record.AFTER_JSON);
+		if (
+			!value ||
+			typeof value !== "object" ||
+			typeof value.itemId !== "string" ||
+			typeof value.kategori !== "string" ||
+			typeof value.namaItem !== "string" ||
+			typeof value.unit !== "string" ||
+			typeof value.createdAt !== "string" ||
+			typeof value.updatedAt !== "string"
+		) {
+			return null;
+		}
+		const kosSeunit = Number(value.kosSeunit);
+		const stokMinimum = Number(value.stokMinimum);
+		if (!Number.isFinite(kosSeunit) || !Number.isFinite(stokMinimum)) return null;
+		return {
+			itemId: value.itemId,
+			kategori: value.kategori,
+			namaItem: value.namaItem,
+			unit: value.unit,
+			kosSeunit,
+			stokAwal: 0,
+			stokMinimum,
+			status: "AKTIF",
+			createdAt: value.createdAt,
+			updatedAt: value.updatedAt,
+		};
+	} catch {
+		return null;
+	}
 }
 
 function malaysiaTimestamp(date = new Date()): string {
@@ -478,6 +691,17 @@ function matchesExistingTransaction(
 		if (typeof value === "number") return Number(record[header]) === value;
 		return String(record[header] ?? "").trim() === String(value);
 	});
+}
+
+function createItemPayloadMatches(
+	result: CreatedItemResult,
+	payload: CreateItemPayload,
+): boolean {
+	return result.kategori === payload.kategori &&
+		normalizedLookupText(result.namaItem) === normalizedLookupText(payload.namaItem) &&
+		result.unit === payload.unit &&
+		result.kosSeunit === payload.kosSeunit &&
+		result.stokMinimum === payload.stokMinimum;
 }
 
 function bearerToken(request: Request): string {
@@ -650,6 +874,149 @@ async function protectedRoute(
 		count: items.length,
 		items,
 	});
+}
+
+async function createItemRoute(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!CREATE_ITEM_ROLES.has(authorization.user.role)) {
+		throw new ApiError(
+			403,
+			"ROLE_NOT_ALLOWED",
+			"Peranan pengguna tidak dibenarkan mendaftar item.",
+		);
+	}
+
+	const key = idempotencyKey(request);
+	const payload = validateCreateItem(await readJsonBody(request));
+	const [itemsData, auditData] = await Promise.all([
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const itemRecords = rowsToRecords(itemsData);
+	const auditRecords = rowsToRecords(auditData);
+	const auditId = await stableId("AUD", `ITEM:${key}`);
+	const existingAudit = auditRecords.find((record) =>
+		record.AUDIT_ID === auditId &&
+		record.ACTION === "CREATE" &&
+		record.MODULE === "ITEM"
+	);
+
+	if (existingAudit) {
+		const storedResult = parseCreatedItemAudit(existingAudit);
+		if (!storedResult || !createItemPayloadMatches(storedResult, payload)) {
+			throw new ApiError(
+				409,
+				"IDEMPOTENCY_CONFLICT",
+				"Kunci idempotensi telah digunakan untuk permintaan lain.",
+			);
+		}
+
+		const existingItem = itemRecords.find(
+			(record) => record.ITEM_ID === storedResult.itemId,
+		);
+		if (existingItem) {
+			if (!createdItemMatches(existingItem, storedResult)) {
+				throw new ApiError(
+					409,
+					"IDEMPOTENCY_CONFLICT",
+					"Rekod idempotensi bercanggah dengan item sedia ada.",
+				);
+			}
+		} else {
+			const duplicate = itemRecords.find((record) =>
+				itemMatchesPayload(record, payload)
+			);
+			if (duplicate) {
+				throw new ApiError(
+					409,
+					"ITEM_ALREADY_EXISTS",
+					"Item yang sepadan telah wujud.",
+					{ existingItem: existingItemSummary(duplicate) },
+				);
+			}
+			await appendSheetRecord(
+				env,
+				env.MASTER_ITEM_SHEET,
+				authorization.googleAccessToken,
+				sheetHeaders(itemsData),
+				itemRecord(storedResult),
+			);
+		}
+
+		return Response.json({
+			success: true,
+			replayed: true,
+			item: publicItemResult(storedResult),
+		});
+	}
+
+	const duplicate = itemRecords.find((record) => itemMatchesPayload(record, payload));
+	if (duplicate) {
+		throw new ApiError(
+			409,
+			"ITEM_ALREADY_EXISTS",
+			"Item yang sepadan telah wujud.",
+			{ existingItem: existingItemSummary(duplicate) },
+		);
+	}
+
+	const prefix = CATEGORY_PREFIXES.get(payload.kategori);
+	if (!prefix) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Kategori tidak sah.");
+	}
+	const timestamp = malaysiaTimestamp();
+	const result: CreatedItemResult = {
+		...payload,
+		itemId: nextItemId(itemRecords, prefix),
+		stokAwal: 0,
+		status: "AKTIF",
+		createdAt: timestamp,
+		updatedAt: timestamp,
+	};
+	const auditRecord: Record<string, string | number> = {
+		AUDIT_ID: auditId,
+		TIMESTAMP: timestamp,
+		USER_EMAIL: authorization.user.email,
+		USER_NAME: authorization.user.nama || authorization.user.email,
+		ACTION: "CREATE",
+		MODULE: "ITEM",
+		RECORD_ID: result.itemId,
+		BEFORE_JSON: "",
+		AFTER_JSON: JSON.stringify(publicItemResult(result)),
+		DEVICE_ID: "",
+		IP_HASH: "",
+		CATATAN: `Pendaftaran item baharu ${result.itemId}`,
+	};
+
+	// AUDIT_LOG menjadi reservasi idempotensi kekal sebelum item ditambah.
+	// Jika append item gagal, retry membaca audit ini dan menambah item sahaja.
+	// Susunan ini mengelakkan keadaan item berjaya tetapi audit tiada.
+	await appendSheetRecord(
+		env,
+		env.AUDIT_LOG_SHEET,
+		authorization.googleAccessToken,
+		sheetHeaders(auditData),
+		auditRecord,
+	);
+	await appendSheetRecord(
+		env,
+		env.MASTER_ITEM_SHEET,
+		authorization.googleAccessToken,
+		sheetHeaders(itemsData),
+		itemRecord(result),
+	);
+
+	return Response.json(
+		{
+			success: true,
+			replayed: false,
+			item: publicItemResult(result),
+		},
+		{ status: 201 },
+	);
 }
 
 async function incomingTransactionRoute(
@@ -826,6 +1193,40 @@ export default {
 					}));
 				}
 				return addCorsHeaders(errorResponse(apiError), origin);
+			}
+		}
+
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/items"
+		) {
+			try {
+				return addCorsHeaders(
+					await createItemRoute(request, env),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(
+						500,
+						"WRITE_FAILED",
+						"Item tidak dapat disimpan.",
+					);
+				const safeError = apiError.status >= 500 &&
+						!["AUTH_CONFIG_ERROR", "AUTH_SERVICE_ERROR"].includes(apiError.code)
+					? new ApiError(500, "WRITE_FAILED", "Item tidak dapat disimpan.")
+					: apiError;
+
+				if (safeError.status >= 500) {
+					console.error(JSON.stringify({
+						message: "create item route failed",
+						code: safeError.code,
+						path: url.pathname,
+						status: safeError.status,
+					}));
+				}
+				return addCorsHeaders(errorResponse(safeError), origin);
 			}
 		}
 

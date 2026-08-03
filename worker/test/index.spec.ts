@@ -90,6 +90,9 @@ type AuthenticatedFetchOptions = {
 	failTransactionAppend?: boolean;
 	failAuditAppend?: boolean;
 	failAuditAppendOnce?: boolean;
+	failItemAppend?: boolean;
+	failItemAppendOnce?: boolean;
+	itemHeaders?: string[];
 };
 
 const USERS_HEADERS = [
@@ -184,10 +187,17 @@ function inventoryRows(count = 130): string[][] {
 function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 	const verifiedEmail = options.verifiedEmail ?? TEST_USER_EMAIL;
 	const user = options.user === undefined ? activeUser() : options.user;
-	const rows = options.inventoryRows ?? inventoryRows();
+	const itemHeaders = options.itemHeaders ?? ITEM_HEADERS;
+	const sourceRows = options.inventoryRows ?? inventoryRows();
+	const rows = options.itemHeaders
+		? sourceRows.map((row) => itemHeaders.map(
+			(header) => row[ITEM_HEADERS.indexOf(header)] ?? "",
+		))
+		: sourceRows;
 	const transactions = options.transactionRows ?? [];
 	const audits = options.auditRows ?? [];
 	let auditAppendFailuresRemaining = options.failAuditAppendOnce ? 1 : 0;
+	let itemAppendFailuresRemaining = options.failItemAppendOnce ? 1 : 0;
 
 	return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const url =
@@ -236,11 +246,21 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 				});
 			}
 
+			if (decodedUrl.includes("/values/MASTER_ITEM!A:Z:append")) {
+				if (options.failItemAppend || itemAppendFailuresRemaining > 0) {
+					itemAppendFailuresRemaining -= 1;
+					return Response.json({ error: "write failed" }, { status: 500 });
+				}
+				const body = JSON.parse(String(init?.body)) as { values: string[][] };
+				rows.push(body.values[0] ?? []);
+				return Response.json({ updates: { updatedRows: 1 } });
+			}
+
 			if (decodedUrl.includes("/values/MASTER_ITEM!A:Z")) {
 				return Response.json({
 					range: `MASTER_ITEM!A1:M${rows.length + 1}`,
 					majorDimension: "ROWS",
-					values: [ITEM_HEADERS, ...rows],
+					values: [itemHeaders, ...rows],
 				});
 			}
 
@@ -322,6 +342,17 @@ function incomingBody(overrides: Record<string, unknown> = {}): string {
 		bahagian: "Stor",
 		tujuan: "Bekalan operasi",
 		catatan: "Dokumen DO-001",
+		...overrides,
+	});
+}
+
+function createItemBody(overrides: Record<string, unknown> = {}): string {
+	return JSON.stringify({
+		kategori: "BAHAN KIMIA",
+		namaItem: "Pencuci Makmal",
+		unit: "BOTOL",
+		kosSeunit: 12.5,
+		stokMinimum: 3,
 		...overrides,
 	});
 }
@@ -564,7 +595,7 @@ describe("ITU eSTOR Worker", () => {
 	});
 
 	it("returns structured NOT_FOUND for an unsupported HTTP method", async () => {
-		const response = await dispatch("/api/items", "POST");
+		const response = await dispatch("/api/items", "PATCH");
 		const body = await response.json<{
 			error: string;
 			message: string;
@@ -575,6 +606,357 @@ describe("ITU eSTOR Worker", () => {
 			error: "NOT_FOUND",
 			message: "Endpoint tidak ditemui.",
 		});
+	});
+
+	it("requires authentication for POST /api/items", async () => {
+		const response = await dispatch(
+			"/api/items",
+			"POST",
+			{
+				"Content-Type": "application/json",
+				"Idempotency-Key": VALID_IDEMPOTENCY_KEY,
+			},
+			createItemBody(),
+		);
+		expect(response.status).toBe(401);
+		expect((await response.json<{ error: string }>()).error).toBe("AUTH_REQUIRED");
+	});
+
+	it("allows item creation only for SUPER_ADMIN and ADMIN_STOR", async () => {
+		for (const role of ["SUPER_ADMIN", "ADMIN_STOR"]) {
+			mockAuthenticatedFetch({ user: activeUser({ role }) });
+			const response = await dispatch(
+				"/api/items",
+				"POST",
+				incomingHeaders(crypto.randomUUID()),
+				createItemBody({ namaItem: `Item ${role}` }),
+			);
+			expect(response.status).toBe(201);
+			vi.restoreAllMocks();
+		}
+
+		for (const role of ["PEMBANTU_STOR", "VIEWER"]) {
+			mockAuthenticatedFetch({ user: activeUser({ role }) });
+			const response = await dispatch(
+				"/api/items",
+				"POST",
+				incomingHeaders(crypto.randomUUID()),
+				createItemBody(),
+			);
+			expect(response.status).toBe(403);
+			expect((await response.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("creates a protected item row and audit using dynamic headers", async () => {
+		const shuffledHeaders = [
+			"STATUS", "ITEM_ID", "NAMA_ITEM", "KATEGORI", "UNIT", "KOS_SEUNIT",
+			"STOK_MINIMUM", "STOK_AWAL", "NAMA_ITEM_ASAL", "CREATED_AT",
+			"SUMBER_TAB", "UPDATED_AT", "SUMBER_BARIS",
+		];
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({
+			auditRows: audits,
+			itemHeaders: shuffledHeaders,
+		});
+		const response = await dispatch(
+			"/api/items",
+			"POST",
+			incomingHeaders(),
+			createItemBody({
+				itemId: "ATTACKER-9999",
+				status: "DIARKIBKAN",
+				stokAwal: 999,
+				sumberTab: "ALAT TULIS",
+				sumberBaris: 88,
+				createdAt: "1900-01-01",
+				updatedAt: "1900-01-01",
+				userEmail: "attacker@example.invalid",
+			}),
+		);
+		const body = await response.json<{
+			success: boolean;
+			replayed: boolean;
+			item: Record<string, unknown>;
+		}>();
+
+		expect(response.status).toBe(201);
+		expect(body.success).toBe(true);
+		expect(body.replayed).toBe(false);
+		expect(body.item).toMatchObject({
+			itemId: "BK-0001",
+			kategori: "BAHAN KIMIA",
+			namaItem: "Pencuci Makmal",
+			unit: "BOTOL",
+			kosSeunit: 12.5,
+			stokAwal: 0,
+			stokMinimum: 3,
+			status: "AKTIF",
+		});
+		expect(String(body.item.createdAt)).toMatch(
+			/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$/,
+		);
+		expect(body.item.updatedAt).toBe(body.item.createdAt);
+
+		const itemAppend = fetchMock.mock.calls.find(([input]) =>
+			decodeURIComponent(String(input)).includes("MASTER_ITEM!A:Z:append")
+		);
+		const itemValues = (JSON.parse(String(itemAppend?.[1]?.body)) as {
+			values: Array<Array<string | number>>;
+		}).values[0] ?? [];
+		const storedItem = Object.fromEntries(
+			shuffledHeaders.map((header, index) => [header, itemValues[index]]),
+		);
+		expect(storedItem).toMatchObject({
+			ITEM_ID: "BK-0001",
+			KATEGORI: "BAHAN KIMIA",
+			NAMA_ITEM: "Pencuci Makmal",
+			NAMA_ITEM_ASAL: "Pencuci Makmal",
+			UNIT: "BOTOL",
+			KOS_SEUNIT: 12.5,
+			STOK_AWAL: 0,
+			STOK_MINIMUM: 3,
+			STATUS: "AKTIF",
+			SUMBER_TAB: "NEW_ITEM",
+			SUMBER_BARIS: 0,
+		});
+		expect(storedItem.CREATED_AT).toBe(body.item.createdAt);
+		expect(storedItem.UPDATED_AT).toBe(body.item.updatedAt);
+
+		expect(audits).toHaveLength(1);
+		const storedAudit = Object.fromEntries(
+			AUDIT_HEADERS.map((header, index) => [header, audits[0]?.[index]]),
+		);
+		expect(storedAudit).toMatchObject({
+			USER_EMAIL: TEST_USER_EMAIL,
+			USER_NAME: "ITU Melaka",
+			ACTION: "CREATE",
+			MODULE: "ITEM",
+			RECORD_ID: "BK-0001",
+		});
+		const after = JSON.parse(String(storedAudit.AFTER_JSON));
+		expect(after).toMatchObject({
+			itemId: "BK-0001",
+			stokAwal: 0,
+			status: "AKTIF",
+		});
+		expect(String(storedAudit.AFTER_JSON)).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
+	});
+
+	it.each([
+		["ALAT TULIS", "AT-0131"],
+		["BAHAN KIMIA", "BK-0001"],
+		["HOUSE HOLD", "HH-0001"],
+		["LAIN-LAIN", "LL-0001"],
+	])("maps category %s to generated prefix", async (kategori, expectedId) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch(
+			"/api/items",
+			"POST",
+			incomingHeaders(),
+			createItemBody({ kategori, namaItem: `Item ${kategori}` }),
+		);
+		expect(response.status).toBe(201);
+		expect((await response.json<{ item: { itemId: string } }>()).item.itemId).toBe(expectedId);
+	});
+
+	it("chooses the next safe numeric sequence rather than row count", async () => {
+		const rows = inventoryRows(2);
+		rows.push([
+			"BK-0016", "BAHAN KIMIA", "Item Lama", "ITEM LAMA", "BOTOL",
+			"1", "0", "0", "AKTIF", "BAHAN KIMIA", "20",
+			"2026-07-29T09:00:00+08:00", "2026-07-29T09:00:00+08:00",
+		]);
+		rows.push([
+			"BK-0099", "BAHAN KIMIA", "Item Terkini", "ITEM TERKINI", "BOTOL",
+			"1", "0", "0", "AKTIF", "BAHAN KIMIA", "21",
+			"2026-07-29T09:00:00+08:00", "2026-07-29T09:00:00+08:00",
+		]);
+		rows.push([
+			"BK-TIDAK-SAH", "BAHAN KIMIA", "Item Aneh", "ITEM ANEH", "BOTOL",
+			"1", "0", "0", "AKTIF", "BAHAN KIMIA", "22",
+			"2026-07-29T09:00:00+08:00", "2026-07-29T09:00:00+08:00",
+		]);
+		mockAuthenticatedFetch({ inventoryRows: rows });
+		const response = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(response.status).toBe(201);
+		expect((await response.json<{ item: { itemId: string } }>()).item.itemId)
+			.toBe("BK-0100");
+	});
+
+	it.each([
+		["invalid JSON", "{", "INVALID_JSON"],
+		["invalid category", createItemBody({ kategori: "MAKANAN" }), "VALIDATION_ERROR"],
+		["blank name", createItemBody({ namaItem: "   " }), "VALIDATION_ERROR"],
+		["excessive name", createItemBody({ namaItem: "A".repeat(161) }), "VALIDATION_ERROR"],
+		["blank unit", createItemBody({ unit: "  " }), "VALIDATION_ERROR"],
+		["excessive unit", createItemBody({ unit: "U".repeat(41) }), "VALIDATION_ERROR"],
+		["negative cost", createItemBody({ kosSeunit: -1 }), "VALIDATION_ERROR"],
+		["mixed-format cost", createItemBody({ kosSeunit: "RM 12.50" }), "VALIDATION_ERROR"],
+		["excess cost decimals", createItemBody({ kosSeunit: 1.234 }), "VALIDATION_ERROR"],
+		["negative minimum", createItemBody({ stokMinimum: -1 }), "VALIDATION_ERROR"],
+		["mixed-format minimum", createItemBody({ stokMinimum: "1 unit" }), "VALIDATION_ERROR"],
+	])("rejects create-item %s", async (_label, requestBody, expectedError) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch(
+			"/api/items", "POST", incomingHeaders(), requestBody,
+		);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe(expectedError);
+	});
+
+	it("requires a valid create-item Idempotency-Key", async () => {
+		mockAuthenticatedFetch();
+		const missing = await dispatch(
+			"/api/items",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			createItemBody(),
+		);
+		expect(missing.status).toBe(400);
+		expect((await missing.json<{ error: string }>()).error)
+			.toBe("INVALID_IDEMPOTENCY_KEY");
+		vi.restoreAllMocks();
+
+		mockAuthenticatedFetch();
+		const malformed = await dispatch(
+			"/api/items", "POST", incomingHeaders("not-a-uuid"), createItemBody(),
+		);
+		expect(malformed.status).toBe(400);
+		expect((await malformed.json<{ error: string }>()).error)
+			.toBe("INVALID_IDEMPOTENCY_KEY");
+	});
+
+	it("rejects a normalized duplicate and returns its safe summary", async () => {
+		const rows = inventoryRows();
+		mockAuthenticatedFetch({ inventoryRows: rows });
+		const response = await dispatch(
+			"/api/items",
+			"POST",
+			incomingHeaders(),
+			createItemBody({
+				kategori: "  alat   tulis ",
+				namaItem: "  KERTAS   a4 80GSM ",
+				unit: " rim ",
+			}),
+		);
+		const body = await response.json<{
+			error: string;
+			existingItem: Record<string, unknown>;
+		}>();
+		expect(response.status).toBe(409);
+		expect(body.error).toBe("ITEM_ALREADY_EXISTS");
+		expect(body.existingItem).toMatchObject({
+			itemId: "AT-0001",
+			kategori: "ALAT TULIS",
+			unit: "RIM",
+		});
+		expect(rows).toHaveLength(130);
+	});
+
+	it("allows the same normalized name in a materially different unit", async () => {
+		mockAuthenticatedFetch();
+		const response = await dispatch(
+			"/api/items",
+			"POST",
+			incomingHeaders(),
+			createItemBody({
+				kategori: "ALAT TULIS",
+				namaItem: "Kertas A4 80gsm",
+				unit: "KOTAK",
+			}),
+		);
+		expect(response.status).toBe(201);
+		expect((await response.json<{ item: { itemId: string } }>()).item.itemId)
+			.toBe("AT-0131");
+	});
+
+	it("replays create-item idempotently without duplicate item or audit", async () => {
+		const rows = inventoryRows();
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ inventoryRows: rows, auditRows: audits });
+		const first = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		const second = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(first.status).toBe(201);
+		expect(second.status).toBe(200);
+		expect((await second.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(rows).toHaveLength(131);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("rejects create-item idempotency key reuse with different payload", async () => {
+		const rows = inventoryRows();
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ inventoryRows: rows, auditRows: audits });
+		await dispatch("/api/items", "POST", incomingHeaders(), createItemBody());
+		const conflict = await dispatch(
+			"/api/items",
+			"POST",
+			incomingHeaders(),
+			createItemBody({ kosSeunit: 13 }),
+		);
+		expect(conflict.status).toBe(409);
+		expect((await conflict.json<{ error: string }>()).error)
+			.toBe("IDEMPOTENCY_CONFLICT");
+		expect(rows).toHaveLength(131);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("recovers an item append failure from the audit reservation", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const rows = inventoryRows();
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			inventoryRows: rows,
+			auditRows: audits,
+			failItemAppendOnce: true,
+		});
+		const first = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(first.status).toBe(500);
+		expect((await first.json<{ error: string }>()).error).toBe("WRITE_FAILED");
+		expect(rows).toHaveLength(130);
+		expect(audits).toHaveLength(1);
+
+		const retry = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(retry.status).toBe(200);
+		expect((await retry.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(rows).toHaveLength(131);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("retries an audit failure without creating a duplicate item", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const rows = inventoryRows();
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			inventoryRows: rows,
+			auditRows: audits,
+			failAuditAppendOnce: true,
+		});
+		const first = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(first.status).toBe(500);
+		expect(rows).toHaveLength(130);
+		expect(audits).toHaveLength(0);
+
+		const retry = await dispatch(
+			"/api/items", "POST", incomingHeaders(), createItemBody(),
+		);
+		expect(retry.status).toBe(201);
+		expect(rows).toHaveLength(131);
+		expect(audits).toHaveLength(1);
 	});
 
 	it("requires authentication for POST /api/transactions/in", async () => {
@@ -862,8 +1244,8 @@ describe("ITU eSTOR Worker", () => {
 		expect(response.headers.has("Access-Control-Allow-Origin")).toBe(false);
 	});
 
-	it("handles a Barang Masuk POST preflight with Idempotency-Key", async () => {
-		const response = await dispatch("/api/transactions/in", "OPTIONS", {
+	it("handles a Daftar Item POST preflight with Idempotency-Key", async () => {
+		const response = await dispatch("/api/items", "OPTIONS", {
 			Origin: PRODUCTION_ORIGIN,
 			"Access-Control-Request-Method": "POST",
 			"Access-Control-Request-Headers": "Content-Type, Authorization, Idempotency-Key",

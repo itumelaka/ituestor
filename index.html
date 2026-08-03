@@ -170,7 +170,10 @@
             <h1>Daftar Item</h1>
             <p>Senarai item sebenar daripada MASTER_ITEM. Klik mana-mana item untuk melihat butiran lengkap.</p>
           </div>
-          <span class="register-icon" aria-hidden="true">📋</span>
+          <div class="register-heading-actions">
+            <button id="openCreateItem" class="create-item-trigger" type="button" hidden>+ Daftar Item Baharu</button>
+            <span class="register-icon" aria-hidden="true">📋</span>
+          </div>
         </section>
 
         <div class="data-state is-loading" id="registerDataState" role="status" aria-live="polite">
@@ -178,6 +181,65 @@
           <span id="registerStateMessage">Memuatkan daftar item…</span>
           <button id="registerRetry" type="button" hidden>Cuba lagi</button>
         </div>
+
+        <section id="createItemPanel" class="create-item-panel" aria-labelledby="createItemTitle" hidden>
+          <div class="create-item-heading">
+            <div>
+              <p class="eyebrow">REKOD INDUK BAHARU</p>
+              <h2 id="createItemTitle">Daftar Item Baharu</h2>
+              <p>Stok awal ditetapkan kepada <strong>0</strong>. Rekod kuantiti pertama melalui Barang Masuk selepas item berjaya didaftarkan.</p>
+            </div>
+            <button id="closeCreateItem" class="panel-close" type="button" aria-label="Tutup borang daftar item">×</button>
+          </div>
+
+          <div class="data-state is-ready" id="createItemState" role="status" aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span id="createItemStateMessage"></span>
+            <button id="retryCreateItem" type="button" hidden>Cuba hantar semula</button>
+          </div>
+
+          <form id="createItemForm" class="create-item-form" novalidate>
+            <label>
+              <span>Kategori <b aria-hidden="true">*</b></span>
+              <select id="createItemCategory" required>
+                <option value="">Pilih kategori</option>
+                <option value="ALAT TULIS">ALAT TULIS</option>
+                <option value="BAHAN KIMIA">BAHAN KIMIA</option>
+                <option value="HOUSE HOLD">HOUSE HOLD</option>
+                <option value="LAIN-LAIN">LAIN-LAIN</option>
+              </select>
+            </label>
+            <label class="create-name-field">
+              <span>Nama item <b aria-hidden="true">*</b></span>
+              <input id="createItemName" type="text" maxlength="160" autocomplete="off" required>
+            </label>
+            <label>
+              <span>Unit <b aria-hidden="true">*</b></span>
+              <input id="createItemUnit" type="text" maxlength="40" placeholder="Contoh: UNIT, KOTAK, BOTOL" autocomplete="off" required>
+            </label>
+            <label>
+              <span>Kos seunit (RM) <b aria-hidden="true">*</b></span>
+              <input id="createItemCost" type="number" min="0" max="1000000000" step="0.01" inputmode="decimal" required>
+            </label>
+            <label>
+              <span>Stok minimum <b aria-hidden="true">*</b></span>
+              <input id="createItemMinimum" type="number" min="0" max="1000000000" step="any" inputmode="decimal" value="0" required>
+            </label>
+            <div class="item-id-preview" aria-live="polite">
+              <small>Awalan ITEM_ID</small>
+              <strong id="createItemPrefix">—</strong>
+              <span>Nombor akhir dijana oleh Worker.</span>
+            </div>
+            <div class="create-item-submit">
+              <p><strong>STOK_AWAL = 0</strong><span>Kuantiti awal tidak dimasukkan melalui borang ini.</span></p>
+              <button id="createItemSubmit" type="submit">Daftar Item</button>
+            </div>
+          </form>
+
+          <div id="createItemSuccessActions" class="create-success-actions" hidden>
+            <button id="continueToIncoming" type="button">Terus ke Barang Masuk →</button>
+          </div>
+        </section>
 
         <section class="register-controls" aria-label="Carian dan penapis daftar item">
           <label class="control-search">
@@ -271,7 +333,10 @@
                   <option value="">Pilih item</option>
                 </select>
               </label>
-              <div class="selected-item" id="incomingItemSummary">Pilih item aktif daripada inventori.</div>
+              <div class="selected-item">
+                <span id="incomingItemSummary">Pilih item aktif daripada inventori.</span>
+                <button id="registerMissingItem" type="button" hidden>Daftar Item Baharu</button>
+              </div>
             </div>
 
             <div class="form-section form-grid">

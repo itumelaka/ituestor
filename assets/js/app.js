@@ -14,6 +14,12 @@ const API_URL = `${API_BASE_URL}/api/items`;
 const SUPABASE_URL = "https://tzsykhjfhmctasjscwch.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy";
 const chartColors = ["#2777c7", "#51a83c", "#ffc313", "#ed4938", "#8a62b8", "#40a5af"];
+const itemCategoryPrefixes = {
+  "ALAT TULIS": "AT-",
+  "BAHAN KIMIA": "BK-",
+  "HOUSE HOLD": "HH-",
+  "LAIN-LAIN": "LL-"
+};
 const ITEMS_PER_PAGE = 20;
 let loadedItems = [];
 let registerPage = 1;
@@ -29,6 +35,10 @@ let authRetryMode = "auth";
 let incomingAttemptKey = "";
 let incomingAttemptFingerprint = "";
 let incomingSubmitting = false;
+let createItemAttemptKey = "";
+let createItemAttemptFingerprint = "";
+let createItemSubmitting = false;
+let createdItemForIncoming = null;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -48,6 +58,22 @@ const elements = {
   registerDataState: document.getElementById("registerDataState"),
   registerStateMessage: document.getElementById("registerStateMessage"),
   registerRetry: document.getElementById("registerRetry"),
+  openCreateItem: document.getElementById("openCreateItem"),
+  createItemPanel: document.getElementById("createItemPanel"),
+  closeCreateItem: document.getElementById("closeCreateItem"),
+  createItemState: document.getElementById("createItemState"),
+  createItemStateMessage: document.getElementById("createItemStateMessage"),
+  retryCreateItem: document.getElementById("retryCreateItem"),
+  createItemForm: document.getElementById("createItemForm"),
+  createItemCategory: document.getElementById("createItemCategory"),
+  createItemName: document.getElementById("createItemName"),
+  createItemUnit: document.getElementById("createItemUnit"),
+  createItemCost: document.getElementById("createItemCost"),
+  createItemMinimum: document.getElementById("createItemMinimum"),
+  createItemPrefix: document.getElementById("createItemPrefix"),
+  createItemSubmit: document.getElementById("createItemSubmit"),
+  createItemSuccessActions: document.getElementById("createItemSuccessActions"),
+  continueToIncoming: document.getElementById("continueToIncoming"),
   itemSearch: document.getElementById("itemSearch"),
   categoryFilter: document.getElementById("categoryFilter"),
   stockFilter: document.getElementById("stockFilter"),
@@ -84,6 +110,7 @@ const elements = {
   incomingItemSearch: document.getElementById("incomingItemSearch"),
   incomingItem: document.getElementById("incomingItem"),
   incomingItemSummary: document.getElementById("incomingItemSummary"),
+  registerMissingItem: document.getElementById("registerMissingItem"),
   incomingQuantity: document.getElementById("incomingQuantity"),
   incomingUnitCost: document.getElementById("incomingUnitCost"),
   incomingParty: document.getElementById("incomingParty"),
@@ -139,6 +166,16 @@ function setIncomingState(state, message, retry = false) {
   elements.incomingState.className = `data-state is-${state}`;
   elements.incomingStateMessage.textContent = message;
   elements.retryIncoming.hidden = !retry;
+}
+
+function setCreateItemState(state, message, retry = false) {
+  elements.createItemState.className = `data-state is-${state}`;
+  elements.createItemStateMessage.textContent = message;
+  elements.retryCreateItem.hidden = !retry;
+}
+
+function canCreateItem() {
+  return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
 
 function itemNumbers(item) {
@@ -273,6 +310,8 @@ function populateIncomingItems() {
   if (matches.some((item) => String(item.itemId) === selected)) {
     elements.incomingItem.value = selected;
   }
+  const missing = Boolean(query) && matches.length === 0;
+  elements.registerMissingItem.hidden = !missing || !canCreateItem();
   updateIncomingItemSummary();
 }
 
@@ -283,11 +322,15 @@ function selectedIncomingItem() {
 function updateIncomingItemSummary() {
   const item = selectedIncomingItem();
   if (!item) {
-    elements.incomingItemSummary.textContent = activeIncomingItems().length
-      ? "Pilih item aktif daripada inventori."
-      : "Tiada item aktif tersedia.";
+    const query = elements.incomingItemSearch.value.trim();
+    elements.incomingItemSummary.textContent = query
+      ? `Item tidak ditemui: ${query}`
+      : activeIncomingItems().length
+        ? "Pilih item aktif daripada inventori."
+        : "Tiada item aktif tersedia.";
     return;
   }
+  elements.registerMissingItem.hidden = true;
   const view = itemView(item);
   elements.incomingItemSummary.textContent =
     `${item.itemId} · ${item.namaItem || item.namaItemAsal || "Tanpa nama"} · ${item.kategori || "Tiada kategori"} · ${item.unit || "Tiada unit"} · Stok awal ${formatNumber(view.stock)} · Kos semasa ${formatCurrency(view.cost)}`;
@@ -429,6 +472,193 @@ async function submitIncomingTransaction(event) {
       !["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role);
     elements.incomingSubmit.textContent = "Simpan Barang Masuk";
   }
+}
+
+function openCreateItemPanel(prefillName = "") {
+  if (!canCreateItem()) return;
+  elements.createItemPanel.hidden = false;
+  if (prefillName && !elements.createItemName.value.trim()) {
+    elements.createItemName.value = prefillName.trim().slice(0, 160);
+  }
+  markCreateItemMaterialChange();
+  elements.createItemPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  elements.createItemName.focus();
+}
+
+function closeCreateItemPanel() {
+  elements.createItemPanel.hidden = true;
+  elements.openCreateItem.focus();
+}
+
+function createItemPayload() {
+  return {
+    kategori: elements.createItemCategory.value,
+    namaItem: elements.createItemName.value.trim().replace(/\s+/g, " "),
+    unit: elements.createItemUnit.value.trim().replace(/\s+/g, " ").toLocaleUpperCase("ms"),
+    kosSeunit: Number(elements.createItemCost.value),
+    stokMinimum: Number(elements.createItemMinimum.value)
+  };
+}
+
+function createItemFingerprint() {
+  return JSON.stringify(createItemPayload());
+}
+
+function markCreateItemMaterialChange() {
+  const fingerprint = createItemFingerprint();
+  if (createItemAttemptFingerprint && fingerprint !== createItemAttemptFingerprint) {
+    createItemAttemptKey = "";
+    createItemAttemptFingerprint = "";
+  }
+  elements.createItemPrefix.textContent =
+    itemCategoryPrefixes[elements.createItemCategory.value] || "—";
+  if (createdItemForIncoming && !createItemSubmitting) {
+    createdItemForIncoming = null;
+    elements.createItemSuccessActions.hidden = true;
+  }
+  if (!createItemSubmitting) setCreateItemState("ready", "");
+}
+
+function createItemErrorMessage(status, code, data) {
+  if (status === 401) return "Sesi anda telah tamat. Log keluar dan masuk semula.";
+  const messages = {
+    INVALID_JSON: "Maklumat item tidak dapat dibaca.",
+    INVALID_IDEMPOTENCY_KEY: "Cubaan ini tidak mempunyai pengecam selamat. Muat semula halaman dan cuba lagi.",
+    VALIDATION_ERROR: "Semak kategori, nama, unit, kos dan stok minimum.",
+    ROLE_NOT_ALLOWED: "Peranan anda tidak dibenarkan mendaftar item baharu.",
+    IDEMPOTENCY_CONFLICT: "Cubaan yang sama telah digunakan untuk maklumat item berbeza.",
+    WRITE_FAILED: "Status simpanan belum dapat dipastikan. Cuba hantar semula tanpa mengubah borang."
+  };
+  if (code === "ITEM_ALREADY_EXISTS") {
+    const item = data?.existingItem;
+    return item?.itemId
+      ? `Item sepadan telah wujud: ${item.itemId} — ${item.namaItem || "tanpa nama"} (${item.unit || "tanpa unit"}).`
+      : "Item dengan nama, kategori dan unit yang sama telah wujud.";
+  }
+  return messages[code] || "Item tidak dapat didaftarkan buat masa ini.";
+}
+
+function mergeConfirmedItem(item) {
+  if (!item?.itemId || loadedItems.some((existing) => existing.itemId === item.itemId)) return;
+  loadedItems = [...loadedItems, {
+    ...item,
+    namaItemAsal: item.namaItem,
+    sumberTab: "NEW_ITEM",
+    sumberBaris: 0
+  }];
+  inventoryLoaded = true;
+  renderDashboard(loadedItems, loadedItems.length);
+  populateRegisterFilters();
+  populateIncomingItems();
+}
+
+async function submitCreateItem(event) {
+  if (event) event.preventDefault();
+  if (createItemSubmitting || !accessGranted) return;
+  if (!canCreateItem()) {
+    setCreateItemState("error", "Peranan anda tidak dibenarkan mendaftar item baharu.");
+    return;
+  }
+  if (!elements.createItemForm.reportValidity()) return;
+
+  let session;
+  try {
+    const result = await supabaseClient.auth.getSession();
+    if (result.error || !result.data.session?.access_token) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    session = result.data.session;
+  } catch {
+    setCreateItemState("error", "Sesi tidak dapat disemak. Cuba lagi.", true);
+    return;
+  }
+
+  const payload = createItemPayload();
+  const fingerprint = JSON.stringify(payload);
+  if (!createItemAttemptKey || createItemAttemptFingerprint !== fingerprint) {
+    createItemAttemptKey = crypto.randomUUID();
+    createItemAttemptFingerprint = fingerprint;
+  }
+
+  createItemSubmitting = true;
+  elements.createItemSubmit.disabled = true;
+  elements.createItemSubmit.textContent = "Sedang mendaftar…";
+  elements.createItemSuccessActions.hidden = true;
+  setCreateItemState("loading", "Mendaftar item dan jejak audit…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/items`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+        "Idempotency-Key": createItemAttemptKey
+      },
+      body: JSON.stringify(payload)
+    });
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      // Gunakan mesej selamat lalai.
+    }
+    if (response.status === 401) {
+      showAccessGate(createItemErrorMessage(response.status, data.error, data), "logout");
+      return;
+    }
+    if (!response.ok || data.success !== true || !data.item) {
+      const uncertain = response.status >= 500 || data.error === "WRITE_FAILED";
+      setCreateItemState(
+        "error",
+        createItemErrorMessage(response.status, data.error, data),
+        uncertain
+      );
+      return;
+    }
+
+    createdItemForIncoming = data.item;
+    createItemAttemptKey = "";
+    createItemAttemptFingerprint = "";
+    setCreateItemState(
+      "success",
+      `${data.replayed ? "Item disahkan semula" : "Item berjaya didaftarkan"}: ${data.item.itemId}. Stok awal ialah 0.`
+    );
+    elements.createItemSuccessActions.hidden = false;
+    const refreshed = await refreshInventoryData();
+    if (!refreshed) mergeConfirmedItem(data.item);
+    elements.itemSearch.value = data.item.itemId;
+    registerPage = 1;
+    renderRegister();
+  } catch {
+    setCreateItemState(
+      "error",
+      "Sambungan terputus dan status simpanan belum pasti. Cuba hantar semula tanpa mengubah borang.",
+      true
+    );
+  } finally {
+    createItemSubmitting = false;
+    elements.createItemSubmit.disabled = !canCreateItem();
+    elements.createItemSubmit.textContent = "Daftar Item";
+  }
+}
+
+function continueCreatedItemToIncoming() {
+  if (!createdItemForIncoming?.itemId) return;
+  const itemId = createdItemForIncoming.itemId;
+  window.location.hash = "#barang-masuk";
+  elements.incomingItemSearch.value = "";
+  populateIncomingItems();
+  elements.incomingItem.value = itemId;
+  if (!selectedIncomingItem()) {
+    elements.incomingItemSearch.value = itemId;
+    populateIncomingItems();
+    elements.incomingItem.value = itemId;
+  }
+  elements.incomingUnitCost.value = "";
+  updateIncomingItemSummary();
+  markIncomingMaterialChange();
+  elements.incomingQuantity.focus();
 }
 
 function filteredRegisterItems() {
@@ -631,6 +861,12 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   currentApplicationUser = null;
   incomingAttemptKey = "";
   incomingAttemptFingerprint = "";
+  createItemAttemptKey = "";
+  createItemAttemptFingerprint = "";
+  createdItemForIncoming = null;
+  elements.openCreateItem.hidden = true;
+  elements.createItemPanel.hidden = true;
+  elements.createItemSuccessActions.hidden = true;
   authRetryMode = "auth";
   document.body.className = "auth-signed-out";
   elements.userProfile.hidden = true;
@@ -666,6 +902,13 @@ function showAuthorizedUser(session, applicationUser) {
   if (roleLabel) roleLabel.textContent = applicationUser.role;
   elements.userProfile.hidden = false;
   currentApplicationUser = applicationUser;
+  const mayCreateItems = canCreateItem();
+  elements.openCreateItem.hidden = !mayCreateItems;
+  elements.createItemSubmit.disabled = !mayCreateItems;
+  elements.createItemSubmit.title = mayCreateItems
+    ? ""
+    : "Peranan ini tidak dibenarkan mendaftar item baharu.";
+  if (!mayCreateItems) elements.createItemPanel.hidden = true;
   const canWrite = ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(applicationUser.role);
   elements.incomingSubmit.disabled = !canWrite;
   elements.incomingSubmit.title = canWrite ? "" : "Peranan ini tidak dibenarkan merekod Barang Masuk.";
@@ -844,6 +1087,7 @@ function ensureInventoryData(accessToken) {
 
 async function loadDashboardData(accessToken) {
   if (!accessGranted || !accessToken) return;
+  const hadLoadedItems = loadedItems.length > 0;
   setDataState("loading", "Memuatkan data stok sebenar…");
   try {
     const response = await fetch(API_URL, {
@@ -873,13 +1117,20 @@ async function loadDashboardData(accessToken) {
     renderRegister();
     setDataState("ready", "");
     setRegisterState(loadedItems.length ? "ready" : "empty", loadedItems.length ? "" : "API tidak mengandungi item untuk dipaparkan.");
+    return true;
   } catch (error) {
     console.error("Data dashboard gagal dimuatkan:", error);
-    loadedItems = [];
-    inventoryLoaded = false;
+    if (!hadLoadedItems) loadedItems = [];
+    inventoryLoaded = hadLoadedItems;
     renderRegister();
     setDataState("error", "Data stok tidak dapat dimuatkan buat masa ini.");
-    setRegisterState("error", "Daftar item tidak dapat dimuatkan buat masa ini.");
+    setRegisterState(
+      "error",
+      hadLoadedItems
+        ? "Data terkini tidak dapat dimuatkan; senarai terakhir masih dipaparkan."
+        : "Daftar item tidak dapat dimuatkan buat masa ini."
+    );
+    return false;
   }
 }
 
@@ -891,7 +1142,7 @@ async function refreshInventoryData() {
     return;
   }
   inventoryLoaded = false;
-  await ensureInventoryData(data.session.access_token);
+  return await ensureInventoryData(data.session.access_token);
 }
 
 async function retryInventoryData() {
@@ -951,6 +1202,15 @@ searchInput.addEventListener("input", () => {
 
 elements.retryData.addEventListener("click", retryInventoryData);
 elements.registerRetry.addEventListener("click", retryInventoryData);
+elements.openCreateItem.addEventListener("click", () => openCreateItemPanel());
+elements.closeCreateItem.addEventListener("click", closeCreateItemPanel);
+[
+  elements.createItemCategory, elements.createItemName, elements.createItemUnit,
+  elements.createItemCost, elements.createItemMinimum
+].forEach((control) => control.addEventListener("input", markCreateItemMaterialChange));
+elements.createItemForm.addEventListener("submit", submitCreateItem);
+elements.retryCreateItem.addEventListener("click", submitCreateItem);
+elements.continueToIncoming.addEventListener("click", continueCreatedItemToIncoming);
 elements.quickBarangMasuk.addEventListener("click", () => {
   window.location.hash = "#barang-masuk";
 });
@@ -966,6 +1226,12 @@ elements.incomingItem.addEventListener("change", () => {
 ].forEach((control) => control.addEventListener("input", markIncomingMaterialChange));
 elements.incomingForm.addEventListener("submit", submitIncomingTransaction);
 elements.retryIncoming.addEventListener("click", submitIncomingTransaction);
+elements.registerMissingItem.addEventListener("click", () => {
+  const query = elements.incomingItemSearch.value.trim();
+  window.location.hash = "#daftar-item";
+  showView("#daftar-item");
+  openCreateItemPanel(query);
+});
 [
   elements.itemSearch, elements.categoryFilter, elements.stockFilter,
   elements.apiStatusFilter, elements.itemSort
