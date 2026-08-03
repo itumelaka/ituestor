@@ -433,8 +433,54 @@
       </div>
       <dl id="itemDetails" class="item-details"></dl>
       <div class="modal-actions">
+        <button id="detailEditItem" class="edit-item-action" type="button" hidden>Edit Maklumat</button>
+        <button id="detailLifecycleItem" class="lifecycle-item-action" type="button" hidden>Nyahaktifkan Item</button>
         <button id="detailAddStock" class="add-stock-action" type="button" hidden>Tambah Stok</button>
       </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="editItemModal" hidden>
+    <section class="item-modal item-edit-modal" role="dialog" aria-modal="true" aria-labelledby="editItemTitle">
+      <div class="modal-heading">
+        <div><p class="eyebrow">KEMAS KINI ITEM</p><h2 id="editItemTitle">Edit Maklumat</h2></div>
+        <button id="closeEditItem" class="modal-close" type="button" aria-label="Tutup borang edit item">×</button>
+      </div>
+      <div class="data-state is-ready" id="editItemState" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span><span id="editItemStateMessage"></span>
+      </div>
+      <dl id="editItemReadonly" class="item-details edit-item-readonly"></dl>
+      <form id="editItemForm" class="item-edit-form">
+        <label>Nama item<input id="editItemName" type="text" maxlength="160" required></label>
+        <label>Unit<input id="editItemUnit" type="text" maxlength="40" required></label>
+        <label>Kos seunit (RM)<input id="editItemCost" type="number" min="0" step="0.01" required></label>
+        <label>Stok minimum<input id="editItemMinimum" type="number" min="0" step="any" required></label>
+        <div class="item-edit-actions">
+          <button id="editItemBack" type="button">Batal</button>
+          <button id="editItemSubmit" class="edit-item-action" type="submit">Simpan Perubahan</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="itemLifecycleModal" hidden>
+    <section class="item-modal item-lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="itemLifecycleTitle">
+      <div class="modal-heading">
+        <div><p class="eyebrow">STATUS ITEM</p><h2 id="itemLifecycleTitle">Nyahaktifkan Item</h2></div>
+        <button id="closeItemLifecycle" class="modal-close" type="button" aria-label="Tutup pengesahan status item">×</button>
+      </div>
+      <p id="itemLifecycleWarning" class="lifecycle-warning"></p>
+      <div class="data-state is-ready" id="itemLifecycleState" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span><span id="itemLifecycleStateMessage"></span>
+      </div>
+      <form id="itemLifecycleForm" class="item-lifecycle-form">
+        <label for="itemLifecycleReason">Sebab <b aria-hidden="true">*</b></label>
+        <textarea id="itemLifecycleReason" minlength="5" maxlength="500" rows="4" required></textarea>
+        <div class="item-edit-actions">
+          <button id="itemLifecycleBack" type="button">Batal</button>
+          <button id="itemLifecycleSubmit" class="lifecycle-item-action" type="submit">Sahkan</button>
+        </div>
+      </form>
     </section>
   </div>
 

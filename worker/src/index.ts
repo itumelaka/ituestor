@@ -28,6 +28,7 @@ const ALLOWED_ROLES = new Set([
 ]);
 const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]);
 const CREATE_ITEM_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
+const MANAGE_ITEM_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
 const CANCEL_TRANSACTION_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
 const CATEGORY_PREFIXES = new Map([
 	["ALAT TULIS", "AT"],
@@ -140,6 +141,21 @@ interface CreatedItemResult extends CreateItemPayload {
 	updatedAt: string;
 }
 
+type EditableItemField = "namaItem" | "unit" | "kosSeunit" | "stokMinimum";
+
+interface ItemMetadataUpdate {
+	provided: Set<EditableItemField>;
+	namaItem?: string;
+	unit?: string;
+	kosSeunit?: number;
+	stokMinimum?: number;
+}
+
+interface ItemStatusUpdate {
+	status: "AKTIF" | "TIDAK_AKTIF";
+	sebab: string;
+}
+
 class ApiError extends Error {
 	constructor(
 		readonly status: number,
@@ -154,7 +170,7 @@ class ApiError extends Error {
 function getCorsHeaders(origin: string): Headers {
 	return new Headers({
 		"Access-Control-Allow-Origin": origin,
-		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key",
 		"Access-Control-Max-Age": "86400",
 		Vary: "Origin",
@@ -411,6 +427,47 @@ async function updateSheetCell(
 	}
 }
 
+async function updateSheetCells(
+	env: Env,
+	sheetName: string,
+	googleAccessToken: string,
+	updates: Array<{ columnIndex: number; rowNumber: number; value: string | number }>,
+): Promise<void> {
+	if (
+		updates.length === 0 ||
+		updates.some(({ columnIndex, rowNumber }) => columnIndex < 0 || rowNumber < 2)
+	) {
+		throw new ApiError(500, "WRITE_FAILED", "Item tidak dapat dikemas kini.");
+	}
+
+	let response: Response;
+	try {
+		response = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}/values:batchUpdate`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${googleAccessToken}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					valueInputOption: "RAW",
+					data: updates.map(({ columnIndex, rowNumber, value }) => ({
+						range: `${sheetName}!${columnName(columnIndex)}${rowNumber}`,
+						majorDimension: "ROWS",
+						values: [[value]],
+					})),
+				}),
+			},
+		);
+	} catch {
+		throw new ApiError(500, "WRITE_FAILED", "Item tidak dapat dikemas kini.");
+	}
+	if (!response.ok) {
+		throw new ApiError(500, "WRITE_FAILED", "Item tidak dapat dikemas kini.");
+	}
+}
+
 async function readJsonBody(request: Request): Promise<unknown> {
 	const contentType = request.headers.get("Content-Type") ?? "";
 	if (!contentType.toLowerCase().includes("application/json")) {
@@ -520,6 +577,20 @@ function normalizedLookupText(value: unknown): string {
 	return normalizeSpaces(String(value ?? "")).toLocaleLowerCase("ms");
 }
 
+function normalizedItemId(value: string): string {
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(value);
+	} catch {
+		throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+	}
+	const itemId = normalizeSpaces(decoded);
+	if (!itemId || itemId.length > 80 || /[\u0000-\u001F\u007F]/.test(itemId)) {
+		throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+	}
+	return itemId;
+}
+
 function strictNonNegativeNumber(
 	value: unknown,
 	fieldName: string,
@@ -578,6 +649,58 @@ function validateCreateItem(value: unknown): CreateItemPayload {
 			1_000_000_000,
 		),
 	};
+}
+
+function validateItemMetadataUpdate(value: unknown): ItemMetadataUpdate {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat item tidak sah.");
+	}
+	const body = value as Record<string, unknown>;
+	const provided = new Set<EditableItemField>();
+	const result: ItemMetadataUpdate = { provided };
+
+	if (Object.hasOwn(body, "namaItem")) {
+		provided.add("namaItem");
+		result.namaItem = normalizeSpaces(requiredText(body.namaItem, "Nama item", 160));
+		if (/[ -]/.test(result.namaItem)) {
+			throw new ApiError(400, "VALIDATION_ERROR", "Nama item tidak sah.");
+		}
+	}
+	if (Object.hasOwn(body, "unit")) {
+		provided.add("unit");
+		result.unit = normalizeSpaces(requiredText(body.unit, "Unit", 40)).toLocaleUpperCase("ms");
+		if (/[ -]/.test(result.unit)) {
+			throw new ApiError(400, "VALIDATION_ERROR", "Unit tidak sah.");
+		}
+	}
+	if (Object.hasOwn(body, "kosSeunit")) {
+		provided.add("kosSeunit");
+		result.kosSeunit = strictNonNegativeNumber(body.kosSeunit, "Kos seunit", 1_000_000_000, true);
+	}
+	if (Object.hasOwn(body, "stokMinimum")) {
+		provided.add("stokMinimum");
+		result.stokMinimum = strictNonNegativeNumber(body.stokMinimum, "Stok minimum", 1_000_000_000);
+	}
+	if (provided.size === 0) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Sekurang-kurangnya satu medan boleh sunting diperlukan.");
+	}
+	return result;
+}
+
+function validateItemStatusUpdate(value: unknown): ItemStatusUpdate {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat status item tidak sah.");
+	}
+	const body = value as Record<string, unknown>;
+	const status = normalizeSpaces(requiredText(body.status, "Status", 30)).toLocaleUpperCase("ms");
+	if (status !== "AKTIF" && status !== "TIDAK_AKTIF") {
+		throw new ApiError(400, "VALIDATION_ERROR", "Status item tidak sah.");
+	}
+	const sebab = requiredText(body.sebab, "Sebab", 500);
+	if (sebab.length < 5 || /[ -]/.test(sebab)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Sebab mesti antara 5 hingga 500 aksara.");
+	}
+	return { status, sebab };
 }
 
 function idempotencyKey(request: Request): string {
@@ -668,6 +791,59 @@ function existingItemSummary(record: Record<string, string>) {
 		namaItem: record.NAMA_ITEM,
 		unit: record.UNIT,
 		status: record.STATUS,
+	};
+}
+
+function managedItemSummary(record: Record<string, string>) {
+	const itemNumber = (value: unknown): number => {
+		const number = Number(String(value ?? "").replace("RM", "").replace(/,/g, "").trim());
+		return Number.isFinite(number) ? number : 0;
+	};
+	return {
+		itemId: record.ITEM_ID ?? "",
+		kategori: record.KATEGORI ?? "",
+		namaItem: record.NAMA_ITEM ?? "",
+		unit: record.UNIT ?? "",
+		kosSeunit: itemNumber(record.KOS_SEUNIT),
+		stokAwal: itemNumber(record.STOK_AWAL),
+		stokMinimum: itemNumber(record.STOK_MINIMUM),
+		status: String(record.STATUS ?? "").trim().toUpperCase(),
+		createdAt: record.CREATED_AT ?? "",
+		updatedAt: record.UPDATED_AT ?? "",
+	};
+}
+
+function sameRecordExcept(
+	before: Record<string, string>,
+	after: Record<string, string>,
+	headers: string[],
+	allowed: Set<string>,
+): boolean {
+	return headers.every((header) => allowed.has(header) || String(before[header] ?? "") === String(after[header] ?? ""));
+}
+
+function itemAuditRecord(
+	auditId: string,
+	action: "UPDATE" | "DEACTIVATE" | "REACTIVATE",
+	itemId: string,
+	user: AuthorizedUser,
+	before: Record<string, unknown>,
+	after: Record<string, unknown>,
+	catatan: string,
+): Record<string, string | number> {
+	return {
+		AUDIT_ID: auditId,
+		TIMESTAMP: malaysiaTimestamp(),
+		USER_EMAIL: user.email,
+		USER_NAME: user.nama || user.email,
+		ACTION: action,
+		MODULE: "ITEM",
+		RECORD_ID: itemId,
+		BEFORE_JSON: JSON.stringify(before),
+		AFTER_JSON: JSON.stringify(after),
+		DEVICE_ID: "",
+		IP_HASH: "",
+		CATATAN: catatan,
 	};
 }
 
@@ -1491,6 +1667,131 @@ async function createItemRoute(
 	);
 }
 
+async function updateItemRoute(request: Request, env: Env, itemIdInput: string): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!MANAGE_ITEM_ROLES.has(authorization.user.role)) {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Peranan pengguna tidak dibenarkan mengemas kini item.");
+	}
+	const itemId = normalizedItemId(itemIdInput);
+	const payload = validateItemMetadataUpdate(await readJsonBody(request));
+	const [itemsData, auditData] = await Promise.all([
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const headers = sheetHeaders(itemsData);
+	const records = rowsToRecords(itemsData);
+	const recordIndex = records.findIndex((record) => record.ITEM_ID === itemId);
+	if (recordIndex < 0) throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+	const beforeRecord = records[recordIndex];
+	const target = { ...beforeRecord };
+	if (payload.provided.has("namaItem")) target.NAMA_ITEM = payload.namaItem!;
+	if (payload.provided.has("unit")) target.UNIT = payload.unit!;
+	if (payload.provided.has("kosSeunit")) target.KOS_SEUNIT = String(payload.kosSeunit);
+	if (payload.provided.has("stokMinimum")) target.STOK_MINIMUM = String(payload.stokMinimum);
+
+	const duplicate = records.find((record, index) => index !== recordIndex &&
+		normalizeSpaces(record.KATEGORI).toLocaleUpperCase("ms") === normalizeSpaces(target.KATEGORI).toLocaleUpperCase("ms") &&
+		normalizedLookupText(record.NAMA_ITEM) === normalizedLookupText(target.NAMA_ITEM) &&
+		normalizeSpaces(record.UNIT).toLocaleUpperCase("ms") === normalizeSpaces(target.UNIT).toLocaleUpperCase("ms"));
+	if (duplicate) {
+		throw new ApiError(409, "ITEM_ALREADY_EXISTS", "Item yang sepadan telah wujud.", { existingItem: existingItemSummary(duplicate) });
+	}
+
+	const changedHeaders = [...payload.provided].filter((field) => {
+		const header = ({ namaItem: "NAMA_ITEM", unit: "UNIT", kosSeunit: "KOS_SEUNIT", stokMinimum: "STOK_MINIMUM" } as const)[field];
+		return String(beforeRecord[header] ?? "") !== String(target[header] ?? "");
+	}).map((field) => ({ namaItem: "NAMA_ITEM", unit: "UNIT", kosSeunit: "KOS_SEUNIT", stokMinimum: "STOK_MINIMUM" } as const)[field]);
+	let verifiedRecord = beforeRecord;
+	let replayed = changedHeaders.length === 0;
+	if (changedHeaders.length > 0) {
+		const timestamp = malaysiaTimestamp();
+		target.UPDATED_AT = timestamp;
+		await updateSheetCells(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken, [
+			...changedHeaders.map((header) => ({ columnIndex: headers.indexOf(header), rowNumber: recordIndex + 2, value: target[header] })),
+			{ columnIndex: headers.indexOf("UPDATED_AT"), rowNumber: recordIndex + 2, value: timestamp },
+		]);
+		const verifiedData = await getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken);
+		verifiedRecord = rowsToRecords(verifiedData).find((record) => record.ITEM_ID === itemId) ?? {};
+		const allowed = new Set([...changedHeaders, "UPDATED_AT"]);
+		if (!verifiedRecord.ITEM_ID || !sameRecordExcept(beforeRecord, verifiedRecord, headers, allowed) ||
+			[...allowed].some((header) => String(verifiedRecord[header] ?? "") !== String(target[header] ?? ""))) {
+			throw new ApiError(500, "WRITE_FAILED", "Kemas kini item tidak dapat disahkan.");
+		}
+	}
+
+	const auditId = await stableId("AUD", `ITEM:UPDATE:${itemId}:${verifiedRecord.UPDATED_AT}`);
+	let audit = rowsToRecords(auditData).find((candidate) => candidate.AUDIT_ID === auditId && candidate.ACTION === "UPDATE" && candidate.MODULE === "ITEM");
+	if (!audit) {
+		const latestAuditData = changedHeaders.length > 0
+			? await getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken)
+			: auditData;
+		audit = rowsToRecords(latestAuditData).find((candidate) => candidate.AUDIT_ID === auditId && candidate.ACTION === "UPDATE" && candidate.MODULE === "ITEM");
+		if (!audit) {
+			const auditRecord = itemAuditRecord(auditId, "UPDATE", itemId, authorization.user,
+				managedItemSummary(beforeRecord), managedItemSummary(verifiedRecord), "Kemas kini maklumat item");
+			await appendSheetRecord(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken, sheetHeaders(latestAuditData), auditRecord);
+		}
+	} else {
+		replayed = true;
+	}
+	return Response.json({ success: true, replayed, item: managedItemSummary(verifiedRecord) });
+}
+
+async function updateItemStatusRoute(request: Request, env: Env, itemIdInput: string): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!MANAGE_ITEM_ROLES.has(authorization.user.role)) {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Peranan pengguna tidak dibenarkan mengubah status item.");
+	}
+	const itemId = normalizedItemId(itemIdInput);
+	const payload = validateItemStatusUpdate(await readJsonBody(request));
+	const [itemsData, auditData] = await Promise.all([
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const headers = sheetHeaders(itemsData);
+	const records = rowsToRecords(itemsData);
+	const recordIndex = records.findIndex((record) => record.ITEM_ID === itemId);
+	if (recordIndex < 0) throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+	const beforeRecord = records[recordIndex];
+	const currentStatus = String(beforeRecord.STATUS ?? "").trim().toUpperCase();
+	if (!new Set(["AKTIF", "TIDAK_AKTIF"]).has(currentStatus)) {
+		throw new ApiError(409, "ITEM_STATUS_CONFLICT", "Status item tidak boleh diubah melalui tindakan ini.");
+	}
+	const action = payload.status === "AKTIF" ? "REACTIVATE" : "DEACTIVATE";
+	let verifiedRecord = beforeRecord;
+	let replayed = currentStatus === payload.status;
+	if (!replayed) {
+		const timestamp = malaysiaTimestamp();
+		await updateSheetCells(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken, [
+			{ columnIndex: headers.indexOf("STATUS"), rowNumber: recordIndex + 2, value: payload.status },
+			{ columnIndex: headers.indexOf("UPDATED_AT"), rowNumber: recordIndex + 2, value: timestamp },
+		]);
+		const verifiedData = await getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken);
+		verifiedRecord = rowsToRecords(verifiedData).find((record) => record.ITEM_ID === itemId) ?? {};
+		if (!verifiedRecord.ITEM_ID || verifiedRecord.STATUS !== payload.status || verifiedRecord.UPDATED_AT !== timestamp ||
+			!sameRecordExcept(beforeRecord, verifiedRecord, headers, new Set(["STATUS", "UPDATED_AT"]))) {
+			throw new ApiError(409, "ITEM_STATUS_CONFLICT", "Status item berubah semasa kemas kini diproses.");
+		}
+	}
+	const auditId = await stableId("AUD", `ITEM:${action}:${itemId}:${verifiedRecord.UPDATED_AT}`);
+	let audit = rowsToRecords(auditData).find((candidate) => candidate.AUDIT_ID === auditId && candidate.ACTION === action && candidate.MODULE === "ITEM");
+	if (audit) {
+		if (audit.CATATAN !== payload.sebab) throw new ApiError(409, "ITEM_STATUS_CONFLICT", "Status item telah diproses dengan sebab berbeza.");
+		replayed = true;
+	} else {
+		const latestAuditData = replayed ? auditData : await getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken);
+		audit = rowsToRecords(latestAuditData).find((candidate) => candidate.AUDIT_ID === auditId && candidate.ACTION === action && candidate.MODULE === "ITEM");
+		if (audit && audit.CATATAN !== payload.sebab) throw new ApiError(409, "ITEM_STATUS_CONFLICT", "Status item telah diproses dengan sebab berbeza.");
+		if (!audit) {
+			const beforeSummary = managedItemSummary(beforeRecord);
+			if (replayed) beforeSummary.status = payload.status === "AKTIF" ? "TIDAK_AKTIF" : "AKTIF";
+			const auditRecord = itemAuditRecord(auditId, action, itemId, authorization.user, beforeSummary, managedItemSummary(verifiedRecord), payload.sebab);
+			await appendSheetRecord(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken, sheetHeaders(latestAuditData), auditRecord);
+		}
+	}
+	return Response.json({ success: true, replayed, item: { itemId, status: verifiedRecord.STATUS, updatedAt: verifiedRecord.UPDATED_AT } });
+}
+
 async function incomingTransactionRoute(
 	request: Request,
 	env: Env,
@@ -1720,6 +2021,25 @@ export default {
 						status: safeError.status,
 					}));
 				}
+				return addCorsHeaders(errorResponse(safeError), origin);
+			}
+		}
+
+		const itemStatusMatch = url.pathname.match(/^\/api\/items\/([^/]+)\/status$/);
+		const itemUpdateMatch = url.pathname.match(/^\/api\/items\/([^/]+)$/);
+		if ((request.method === "PATCH" && itemUpdateMatch) || (request.method === "POST" && itemStatusMatch)) {
+			try {
+				return addCorsHeaders(
+					request.method === "PATCH"
+						? await updateItemRoute(request, env, itemUpdateMatch![1])
+						: await updateItemStatusRoute(request, env, itemStatusMatch![1]),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError ? error : new ApiError(500, "WRITE_FAILED", "Item tidak dapat dikemas kini.");
+				const safeError = apiError.status >= 500 && !["AUTH_CONFIG_ERROR", "AUTH_SERVICE_ERROR"].includes(apiError.code)
+					? new ApiError(500, "WRITE_FAILED", "Item tidak dapat dikemas kini.") : apiError;
+				if (safeError.status >= 500) console.error(JSON.stringify({ message: "manage item route failed", code: safeError.code, path: url.pathname, status: safeError.status }));
 				return addCorsHeaders(errorResponse(safeError), origin);
 			}
 		}

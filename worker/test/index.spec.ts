@@ -96,6 +96,7 @@ type AuthenticatedFetchOptions = {
 	transactionHeaders?: string[];
 	failTransactionRead?: boolean;
 	failStatusUpdate?: boolean;
+	failItemUpdate?: boolean;
 };
 
 const USERS_HEADERS = [
@@ -241,6 +242,29 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 				`Bearer ${TEST_GOOGLE_ACCESS_TOKEN}`,
 			);
 			const decodedUrl = decodeURIComponent(url);
+
+			if (init?.method === "POST" && decodedUrl.endsWith("/values:batchUpdate")) {
+				if (options.failItemUpdate) {
+					return Response.json({ error: "write failed" }, { status: 500 });
+				}
+				const body = JSON.parse(String(init?.body)) as {
+					valueInputOption: string;
+					data: Array<{ range: string; values: Array<Array<string | number>> }>;
+				};
+				expect(body.valueInputOption).toBe("RAW");
+				for (const update of body.data) {
+					const match = update.range.match(/^MASTER_ITEM!([A-Z]+)(\d+)$/);
+					if (!match) throw new Error(`Julat kemas kini item tidak sah: ${update.range}`);
+					const columnIndex = [...match[1]].reduce(
+						(value, character) => value * 26 + character.charCodeAt(0) - 64,
+						0,
+					) - 1;
+					const rowIndex = Number(match[2]) - 2;
+					if (!rows[rowIndex]) throw new Error("Baris item tidak wujud.");
+					rows[rowIndex][columnIndex] = String(update.values[0]?.[0] ?? "");
+				}
+				return Response.json({ totalUpdatedRows: 1, totalUpdatedCells: body.data.length });
+			}
 
 			if (init?.method === "PUT" && decodedUrl.includes("/values/TRANSACTIONS!")) {
 				if (options.failStatusUpdate) {
@@ -1184,6 +1208,183 @@ describe("ITU eSTOR Worker", () => {
 		expect(audits).toHaveLength(1);
 	});
 
+	it.each(["SUPER_ADMIN", "ADMIN_STOR"])("allows %s to update item metadata", async (role) => {
+		const rows = inventoryRows();
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ user: activeUser({ role }), inventoryRows: rows, auditRows: audits });
+		const response = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({
+			namaItem: "  Kertas A4 Premium  ", unit: " pek ", kosSeunit: 22.5, stokMinimum: 4,
+			itemId: "PALSU", kategori: "LAIN-LAIN", stokAwal: 999, status: "TIDAK_AKTIF",
+		}));
+		const body = await response.json<{ success: boolean; item: Record<string, unknown> }>();
+		expect(response.status).toBe(200);
+		expect(body.item).toMatchObject({ itemId: "AT-0001", kategori: "ALAT TULIS", namaItem: "Kertas A4 Premium", unit: "PEK", kosSeunit: 22.5, stokAwal: 12, stokMinimum: 4, status: "AKTIF" });
+		expect(body.item.updatedAt).not.toBe("2026-07-29T09:00:00+08:00");
+		const updateCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/values:batchUpdate"));
+		const updateBody = JSON.parse(String(updateCall?.[1]?.body)) as { data: Array<{ range: string }> };
+		expect(updateBody.data.map((entry) => entry.range).sort()).toEqual(["MASTER_ITEM!C2", "MASTER_ITEM!E2", "MASTER_ITEM!F2", "MASTER_ITEM!H2", "MASTER_ITEM!M2"].sort());
+		expect(rows[0]?.[ITEM_HEADERS.indexOf("NAMA_ITEM_ASAL")]).toBe("KERTAS A4 80GSM");
+		expect(rows[0]?.[ITEM_HEADERS.indexOf("STOK_AWAL")]).toBe("12");
+		expect(rows[0]?.[ITEM_HEADERS.indexOf("STATUS")]).toBe("AKTIF");
+		expect(audits).toHaveLength(1);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("ACTION")]).toBe("UPDATE");
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("MODULE")]).toBe("ITEM");
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("RECORD_ID")]).toBe("AT-0001");
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("BEFORE_JSON")]).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
+	});
+
+	it.each(["PEMBANTU_STOR", "VIEWER"])("rejects %s metadata and lifecycle management", async (role) => {
+		mockAuthenticatedFetch({ user: activeUser({ role }) });
+		const edit = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ namaItem: "Nama Baru" }));
+		expect(edit.status).toBe(403);
+		expect((await edit.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+		const lifecycle = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), JSON.stringify({ status: "TIDAK_AKTIF", sebab: "Tidak digunakan" }));
+		expect(lifecycle.status).toBe(403);
+		expect((await lifecycle.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("updates only a partial metadata field and preserves every other cell", async () => {
+		const rows = inventoryRows(1);
+		const before = rows[0]?.slice() ?? [];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: rows });
+		const response = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ stokMinimum: 7 }));
+		expect(response.status).toBe(200);
+		ITEM_HEADERS.forEach((header, index) => {
+			if (!["STOK_MINIMUM", "UPDATED_AT"].includes(header)) expect(rows[0]?.[index]).toBe(before[index]);
+		});
+		const updateCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/values:batchUpdate"));
+		const updateBody = JSON.parse(String(updateCall?.[1]?.body)) as { data: Array<{ range: string }> };
+		expect(updateBody.data.map((entry) => entry.range).sort()).toEqual(["MASTER_ITEM!H2", "MASTER_ITEM!M2"]);
+	});
+
+	it("maps metadata update cells from dynamic MASTER_ITEM headers", async () => {
+		const shuffledHeaders = [
+			"STATUS", "ITEM_ID", "UPDATED_AT", "UNIT", "NAMA_ITEM", "KATEGORI",
+			"STOK_MINIMUM", "KOS_SEUNIT", "STOK_AWAL", "NAMA_ITEM_ASAL", "SUMBER_TAB",
+			"SUMBER_BARIS", "CREATED_AT",
+		];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), itemHeaders: shuffledHeaders });
+		const response = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ unit: "PAKET" }));
+		expect(response.status).toBe(200);
+		const updateCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/values:batchUpdate"));
+		const updateBody = JSON.parse(String(updateCall?.[1]?.body)) as { data: Array<{ range: string }> };
+		expect(updateBody.data.map((entry) => entry.range).sort()).toEqual(["MASTER_ITEM!C2", "MASTER_ITEM!D2"]);
+	});
+
+	it.each([
+		["invalid JSON", "{", "INVALID_JSON"],
+		["no editable fields", JSON.stringify({ status: "AKTIF", stokAwal: 5 }), "VALIDATION_ERROR"],
+		["blank name", JSON.stringify({ namaItem: "  " }), "VALIDATION_ERROR"],
+		["invalid unit", JSON.stringify({ unit: "  " }), "VALIDATION_ERROR"],
+		["negative cost", JSON.stringify({ kosSeunit: -1 }), "VALIDATION_ERROR"],
+		["excess cost decimals", JSON.stringify({ kosSeunit: 1.234 }), "VALIDATION_ERROR"],
+		["negative minimum", JSON.stringify({ stokMinimum: -1 }), "VALIDATION_ERROR"],
+	])("rejects metadata update with %s", async (_label, requestBody, expectedError) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), requestBody);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe(expectedError);
+	});
+
+	it("rejects missing and duplicate-normalized item metadata", async () => {
+		const rows = inventoryRows(2);
+		rows[1]![ITEM_HEADERS.indexOf("KATEGORI")] = "ALAT TULIS";
+		rows[1]![ITEM_HEADERS.indexOf("NAMA_ITEM")] = "Pensel 2B";
+		rows[1]![ITEM_HEADERS.indexOf("UNIT")] = "KOTAK";
+		mockAuthenticatedFetch({ inventoryRows: rows });
+		const missing = await dispatch("/api/items/TIADA", "PATCH", cancellationHeaders(), JSON.stringify({ namaItem: "Baru" }));
+		expect(missing.status).toBe(404);
+		const duplicate = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ namaItem: " pensel   2b ", unit: " kotak " }));
+		expect(duplicate.status).toBe(409);
+		expect((await duplicate.json<{ error: string }>()).error).toBe("ITEM_ALREADY_EXISTS");
+	});
+
+	it("recovers a missing UPDATE audit without a second item mutation", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const rows = inventoryRows(1);
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: rows, auditRows: audits, failAuditAppendOnce: true });
+		const first = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ namaItem: "Nama Pulih" }));
+		expect(first.status).toBe(500);
+		expect(rows[0]?.[ITEM_HEADERS.indexOf("NAMA_ITEM")]).toBe("Nama Pulih");
+		const retry = await dispatch("/api/items/AT-0001", "PATCH", cancellationHeaders(), JSON.stringify({ namaItem: "Nama Pulih" }));
+		expect(retry.status).toBe(200);
+		expect((await retry.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(audits).toHaveLength(1);
+		expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/values:batchUpdate"))).toHaveLength(1);
+	});
+
+	it.each([
+		["AKTIF", "TIDAK_AKTIF", "DEACTIVATE"],
+		["TIDAK_AKTIF", "AKTIF", "REACTIVATE"],
+	])("changes lifecycle %s to %s with audit %s", async (initial, target, action) => {
+		const rows = inventoryRows(1);
+		rows[0]![ITEM_HEADERS.indexOf("STATUS")] = initial;
+		const before = rows[0]!.slice();
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: rows, auditRows: audits });
+		const response = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), JSON.stringify({ status: target, sebab: "Perubahan operasi stor" }));
+		expect(response.status).toBe(200);
+		expect((await response.json<{ item: { status: string } }>()).item.status).toBe(target);
+		ITEM_HEADERS.forEach((header, index) => {
+			if (!["STATUS", "UPDATED_AT"].includes(header)) expect(rows[0]?.[index]).toBe(before[index]);
+		});
+		const updateCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/values:batchUpdate"));
+		const updateBody = JSON.parse(String(updateCall?.[1]?.body)) as { data: Array<{ range: string }> };
+		expect(updateBody.data.map((entry) => entry.range).sort()).toEqual(["MASTER_ITEM!I2", "MASTER_ITEM!M2"]);
+		expect(audits).toHaveLength(1);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("ACTION")]).toBe(action);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("CATATAN")]).toBe("Perubahan operasi stor");
+	});
+
+	it("replays a same-status lifecycle request without physical mutation", async () => {
+		const rows = inventoryRows(1);
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: rows });
+		const response = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), JSON.stringify({ status: "AKTIF", sebab: "Kekal untuk operasi" }));
+		expect(response.status).toBe(200);
+		expect((await response.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/values:batchUpdate"))).toBe(false);
+		expect(rows).toHaveLength(1);
+	});
+
+	it("recovers a missing lifecycle audit without repeating the status update", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const rows = inventoryRows(1);
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: rows, auditRows: audits, failAuditAppendOnce: true });
+		const requestBody = JSON.stringify({ status: "TIDAK_AKTIF", sebab: "Tidak digunakan sementara" });
+		const first = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), requestBody);
+		expect(first.status).toBe(500);
+		expect(rows[0]?.[ITEM_HEADERS.indexOf("STATUS")]).toBe("TIDAK_AKTIF");
+		const retry = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), requestBody);
+		expect(retry.status).toBe(200);
+		expect((await retry.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(audits).toHaveLength(1);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("ACTION")]).toBe("DEACTIVATE");
+		expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/values:batchUpdate"))).toHaveLength(1);
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+	});
+
+	it.each([
+		[JSON.stringify({ status: "DIARKIBKAN", sebab: "Arkib item ini" }), "VALIDATION_ERROR"],
+		[JSON.stringify({ status: "TIDAK_AKTIF", sebab: "  " }), "VALIDATION_ERROR"],
+		[JSON.stringify({ status: "TIDAK_AKTIF", sebab: "abc" }), "VALIDATION_ERROR"],
+	])("rejects invalid lifecycle input", async (requestBody, expectedError) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), requestBody);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe(expectedError);
+	});
+
+	it("rejects lifecycle changes for archived items", async () => {
+		const rows = inventoryRows(1);
+		rows[0]![ITEM_HEADERS.indexOf("STATUS")] = "DIARKIBKAN";
+		mockAuthenticatedFetch({ inventoryRows: rows });
+		const response = await dispatch("/api/items/AT-0001/status", "POST", cancellationHeaders(), JSON.stringify({ status: "AKTIF", sebab: "Cuba aktif semula" }));
+		expect(response.status).toBe(409);
+		expect((await response.json<{ error: string }>()).error).toBe("ITEM_STATUS_CONFLICT");
+	});
+
 	it("requires authentication for POST /api/transactions/in", async () => {
 		const response = await dispatch(
 			"/api/transactions/in",
@@ -1746,7 +1947,7 @@ describe("ITU eSTOR Worker", () => {
 			PRODUCTION_ORIGIN,
 		);
 		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-			"GET, POST, OPTIONS",
+			"GET, POST, PATCH, OPTIONS",
 		);
 		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
 			"Content-Type, Authorization, Idempotency-Key",
@@ -1787,7 +1988,7 @@ describe("ITU eSTOR Worker", () => {
 			PRODUCTION_ORIGIN,
 		);
 		expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-			"GET, POST, OPTIONS",
+			"GET, POST, PATCH, OPTIONS",
 		);
 		expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
 			"Content-Type, Authorization, Idempotency-Key",

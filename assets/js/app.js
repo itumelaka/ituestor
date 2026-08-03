@@ -46,6 +46,8 @@ let transactionsLoaded = false;
 let openedTransactionId = "";
 let lastFocusedTransaction = null;
 let cancellationSubmitting = false;
+let itemEditSubmitting = false;
+let itemLifecycleSubmitting = false;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -100,6 +102,31 @@ const elements = {
   itemDetails: document.getElementById("itemDetails"),
   closeItemModal: document.getElementById("closeItemModal"),
   detailAddStock: document.getElementById("detailAddStock"),
+  detailEditItem: document.getElementById("detailEditItem"),
+  detailLifecycleItem: document.getElementById("detailLifecycleItem"),
+  editItemModal: document.getElementById("editItemModal"),
+  closeEditItem: document.getElementById("closeEditItem"),
+  editItemTitle: document.getElementById("editItemTitle"),
+  editItemState: document.getElementById("editItemState"),
+  editItemStateMessage: document.getElementById("editItemStateMessage"),
+  editItemReadonly: document.getElementById("editItemReadonly"),
+  editItemForm: document.getElementById("editItemForm"),
+  editItemName: document.getElementById("editItemName"),
+  editItemUnit: document.getElementById("editItemUnit"),
+  editItemCost: document.getElementById("editItemCost"),
+  editItemMinimum: document.getElementById("editItemMinimum"),
+  editItemBack: document.getElementById("editItemBack"),
+  editItemSubmit: document.getElementById("editItemSubmit"),
+  itemLifecycleModal: document.getElementById("itemLifecycleModal"),
+  closeItemLifecycle: document.getElementById("closeItemLifecycle"),
+  itemLifecycleTitle: document.getElementById("itemLifecycleTitle"),
+  itemLifecycleWarning: document.getElementById("itemLifecycleWarning"),
+  itemLifecycleState: document.getElementById("itemLifecycleState"),
+  itemLifecycleStateMessage: document.getElementById("itemLifecycleStateMessage"),
+  itemLifecycleForm: document.getElementById("itemLifecycleForm"),
+  itemLifecycleReason: document.getElementById("itemLifecycleReason"),
+  itemLifecycleBack: document.getElementById("itemLifecycleBack"),
+  itemLifecycleSubmit: document.getElementById("itemLifecycleSubmit"),
   authGate: document.getElementById("authGate"),
   authState: document.getElementById("authState"),
   authStateMessage: document.getElementById("authStateMessage"),
@@ -221,6 +248,10 @@ function canCreateItem() {
 
 function canAddStock() {
   return ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role);
+}
+
+function canManageItems() {
+  return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
 
 function canCancelTransactions() {
@@ -995,7 +1026,7 @@ function renderRegisterItem(view, card = false) {
         <span>Kategori<strong>${category}</strong></span><span>Unit<strong>${unit}</strong></span>
         <span>Stok semasa<strong>${formatNumber(view.stock)}</strong></span><span>Stok minimum<strong>${formatNumber(view.minimum)}</strong></span>
         <span>Kos seunit<strong>${formatCurrency(view.cost)}</strong></span><span>Nilai semasa<strong>${formatCurrency(view.value)}</strong></span>
-        <span>Status item<strong>${apiStatus}</strong></span>
+        <span>Status item<strong class="status-badge ${item.status === "AKTIF" ? "api-active" : item.status === "TIDAK_AKTIF" ? "api-inactive" : ""}">${apiStatus}</strong></span>
       </span>
       </button>${addStockAction}
     </article>`;
@@ -1004,7 +1035,7 @@ function renderRegisterItem(view, card = false) {
     <td>${id}</td><td>${name}</td><td>${category}</td><td>${unit}</td>
     <td class="money">${formatCurrency(view.cost)}</td><td class="number-cell">${formatNumber(view.stock)}</td>
     <td class="number-cell">${formatNumber(view.minimum)}</td><td class="money">${formatCurrency(view.value)}</td>
-    <td><b class="status-badge ${item.status === "AKTIF" ? "api-active" : ""}">${apiStatus}</b></td>
+    <td><b class="status-badge ${item.status === "AKTIF" ? "api-active" : item.status === "TIDAK_AKTIF" ? "api-inactive" : ""}">${apiStatus}</b></td>
     <td><b class="status-badge ${statusClass(view.operationalStatus)}">${operation}</b></td>
     <td>${addStockAction}</td>
   </tr>`;
@@ -1096,6 +1127,192 @@ function renderItemDetails(item) {
   const mayAddStock = canAddStock() && String(item.status ?? "").trim().toUpperCase() === "AKTIF";
   elements.detailAddStock.hidden = !mayAddStock;
   elements.detailAddStock.dataset.addStockId = mayAddStock ? item.itemId : "";
+  const mayManage = canManageItems();
+  const status = String(item.status ?? "").trim().toUpperCase();
+  elements.detailEditItem.hidden = !mayManage;
+  elements.detailEditItem.dataset.itemId = mayManage ? item.itemId : "";
+  const lifecycleAvailable = mayManage && ["AKTIF", "TIDAK_AKTIF"].includes(status);
+  elements.detailLifecycleItem.hidden = !lifecycleAvailable;
+  elements.detailLifecycleItem.dataset.itemId = lifecycleAvailable ? item.itemId : "";
+  elements.detailLifecycleItem.dataset.targetStatus = status === "AKTIF" ? "TIDAK_AKTIF" : "AKTIF";
+  elements.detailLifecycleItem.textContent = status === "AKTIF" ? "Nyahaktifkan Item" : "Aktifkan Semula";
+  elements.detailLifecycleItem.classList.toggle("is-reactivate", status === "TIDAK_AKTIF");
+}
+
+function setItemEditState(state, message) {
+  elements.editItemState.className = `data-state is-${state}`;
+  elements.editItemStateMessage.textContent = message;
+}
+
+function setItemLifecycleState(state, message) {
+  elements.itemLifecycleState.className = `data-state is-${state}`;
+  elements.itemLifecycleStateMessage.textContent = message;
+}
+
+function managedItemError(status, code) {
+  if (status === 401) return "Sesi anda telah tamat. Log keluar dan masuk semula.";
+  const messages = {
+    ROLE_NOT_ALLOWED: "Peranan anda tidak dibenarkan mengurus item.",
+    ITEM_NOT_FOUND: "Item ini tidak lagi ditemui. Muat semula daftar item.",
+    ITEM_ALREADY_EXISTS: "Gabungan kategori, nama item dan unit itu telah digunakan.",
+    ITEM_STATUS_CONFLICT: "Status item telah berubah. Muat semula dan cuba lagi.",
+    VALIDATION_ERROR: "Semak maklumat yang dimasukkan dan cuba lagi.",
+    INVALID_JSON: "Maklumat permintaan tidak sah.",
+    WRITE_FAILED: "Perubahan belum dapat disahkan. Cuba semula tanpa mengubah maklumat."
+  };
+  return messages[code] || (status >= 500 ? "Perkhidmatan item tidak tersedia buat masa ini." : "Perubahan item tidak dapat disimpan.");
+}
+
+function openEditItem() {
+  if (!canManageItems() || !openedItemId) return;
+  const item = loadedItems.find((candidate) => String(candidate.itemId) === openedItemId);
+  if (!item) return;
+  const view = itemView(item);
+  elements.editItemTitle.textContent = `Edit ${item.namaItem || item.itemId}`;
+  elements.editItemReadonly.innerHTML = [
+    ["Item ID", item.itemId], ["Kategori", item.kategori],
+    ["Stok awal", formatNumber(view.initialStock)], ["Stok semasa", formatNumber(view.stock)]
+  ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`).join("");
+  elements.editItemName.value = item.namaItem || "";
+  elements.editItemUnit.value = item.unit || "";
+  elements.editItemCost.value = Number.isFinite(Number(item.kosSeunit)) ? String(item.kosSeunit) : "";
+  elements.editItemMinimum.value = Number.isFinite(Number(item.stokMinimum)) ? String(item.stokMinimum) : "";
+  elements.editItemForm.dataset.itemId = item.itemId;
+  setItemEditState("ready", "");
+  elements.editItemModal.hidden = false;
+  elements.editItemName.focus();
+}
+
+function closeEditItem() {
+  if (itemEditSubmitting || elements.editItemModal.hidden) return;
+  elements.editItemModal.hidden = true;
+  elements.detailEditItem.focus();
+}
+
+async function submitItemEdit(event) {
+  event.preventDefault();
+  if (itemEditSubmitting || !canManageItems()) return;
+  const itemId = elements.editItemForm.dataset.itemId;
+  const item = loadedItems.find((candidate) => String(candidate.itemId) === itemId);
+  if (!item || !elements.editItemForm.reportValidity()) return;
+  const values = {
+    namaItem: elements.editItemName.value.trim().replace(/\s+/g, " "),
+    unit: elements.editItemUnit.value.trim().replace(/\s+/g, " ").toLocaleUpperCase("ms"),
+    kosSeunit: Number(elements.editItemCost.value),
+    stokMinimum: Number(elements.editItemMinimum.value)
+  };
+  const payload = {};
+  if (values.namaItem !== item.namaItem) payload.namaItem = values.namaItem;
+  if (values.unit !== item.unit) payload.unit = values.unit;
+  if (values.kosSeunit !== Number(item.kosSeunit)) payload.kosSeunit = values.kosSeunit;
+  if (values.stokMinimum !== Number(item.stokMinimum)) payload.stokMinimum = values.stokMinimum;
+  if (!Object.keys(payload).length) {
+    setItemEditState("error", "Tiada perubahan untuk disimpan.");
+    return;
+  }
+  itemEditSubmitting = true;
+  elements.editItemSubmit.disabled = true;
+  elements.closeEditItem.disabled = true;
+  setItemEditState("loading", "Menyimpan dan mengesahkan perubahan…");
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error || !data.session?.access_token) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    const response = await fetch(`${API_URL}/${encodeURIComponent(itemId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify(payload)
+    });
+    let result = {};
+    try { result = await response.json(); } catch { /* Gunakan mesej selamat. */ }
+    if (response.status === 401) {
+      showAccessGate(managedItemError(response.status, result.error), "logout");
+      return;
+    }
+    if (!response.ok || result.success !== true) {
+      setItemEditState("error", managedItemError(response.status, result.error));
+      return;
+    }
+    setItemEditState("success", result.replayed ? "Perubahan telah pun disahkan." : "Maklumat item berjaya dikemas kini.");
+    const refreshed = await refreshInventoryData();
+    if (refreshed) elements.editItemModal.hidden = true;
+  } catch {
+    setItemEditState("error", "Sambungan terputus dan status simpanan belum pasti. Cuba semula tanpa mengubah maklumat.");
+  } finally {
+    itemEditSubmitting = false;
+    elements.editItemSubmit.disabled = false;
+    elements.closeEditItem.disabled = false;
+  }
+}
+
+function openItemLifecycle() {
+  if (!canManageItems() || !openedItemId) return;
+  const item = loadedItems.find((candidate) => String(candidate.itemId) === openedItemId);
+  if (!item) return;
+  const target = String(item.status).toUpperCase() === "AKTIF" ? "TIDAK_AKTIF" : "AKTIF";
+  const reactivating = target === "AKTIF";
+  elements.itemLifecycleForm.dataset.itemId = item.itemId;
+  elements.itemLifecycleForm.dataset.targetStatus = target;
+  elements.itemLifecycleTitle.textContent = reactivating ? "Aktifkan Semula Item" : "Nyahaktifkan Item";
+  elements.itemLifecycleWarning.textContent = reactivating
+    ? "Item akan tersedia semula untuk transaksi stok baharu selepas perubahan disahkan."
+    : "Item kekal dalam daftar dan sejarah, tetapi tidak boleh digunakan untuk transaksi stok baharu.";
+  elements.itemLifecycleSubmit.textContent = reactivating ? "Aktifkan Semula" : "Nyahaktifkan Item";
+  elements.itemLifecycleSubmit.classList.toggle("is-reactivate", reactivating);
+  elements.itemLifecycleReason.value = "";
+  setItemLifecycleState("ready", "");
+  elements.itemLifecycleModal.hidden = false;
+  elements.itemLifecycleReason.focus();
+}
+
+function closeItemLifecycle() {
+  if (itemLifecycleSubmitting || elements.itemLifecycleModal.hidden) return;
+  elements.itemLifecycleModal.hidden = true;
+  elements.detailLifecycleItem.focus();
+}
+
+async function submitItemLifecycle(event) {
+  event.preventDefault();
+  if (itemLifecycleSubmitting || !canManageItems() || !elements.itemLifecycleForm.reportValidity()) return;
+  const itemId = elements.itemLifecycleForm.dataset.itemId;
+  const status = elements.itemLifecycleForm.dataset.targetStatus;
+  itemLifecycleSubmitting = true;
+  elements.itemLifecycleSubmit.disabled = true;
+  elements.closeItemLifecycle.disabled = true;
+  setItemLifecycleState("loading", "Mengemas kini status dan merekod audit…");
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error || !data.session?.access_token) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    const response = await fetch(`${API_URL}/${encodeURIComponent(itemId)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({ status, sebab: elements.itemLifecycleReason.value.trim() })
+    });
+    let result = {};
+    try { result = await response.json(); } catch { /* Gunakan mesej selamat. */ }
+    if (response.status === 401) {
+      showAccessGate(managedItemError(response.status, result.error), "logout");
+      return;
+    }
+    if (!response.ok || result.success !== true) {
+      setItemLifecycleState("error", managedItemError(response.status, result.error));
+      return;
+    }
+    setItemLifecycleState("success", result.replayed ? "Status item telah pun disahkan." : "Status item berjaya dikemas kini.");
+    const refreshed = await refreshInventoryData();
+    if (refreshed) elements.itemLifecycleModal.hidden = true;
+  } catch {
+    setItemLifecycleState("error", "Sambungan terputus dan status perubahan belum pasti. Cuba semula dengan sebab yang sama.");
+  } finally {
+    itemLifecycleSubmitting = false;
+    elements.itemLifecycleSubmit.disabled = false;
+    elements.closeItemLifecycle.disabled = false;
+  }
 }
 
 function openItemDetails(itemId, trigger) {
@@ -1114,6 +1331,8 @@ function closeItemDetails() {
   elements.itemModal.hidden = true;
   document.body.style.overflow = "";
   openedItemId = "";
+  elements.editItemModal.hidden = true;
+  elements.itemLifecycleModal.hidden = true;
   if (lastFocusedItem) lastFocusedItem.focus();
 }
 
@@ -1553,6 +1772,14 @@ navLinks.forEach((link) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.itemLifecycleModal.hidden && !itemLifecycleSubmitting) {
+    closeItemLifecycle();
+    return;
+  }
+  if (event.key === "Escape" && !elements.editItemModal.hidden && !itemEditSubmitting) {
+    closeEditItem();
+    return;
+  }
   if (event.key === "Escape" && !elements.cancelTransactionModal.hidden && !cancellationSubmitting) {
     closeCancellationDialog();
     return;
@@ -1661,6 +1888,20 @@ elements.closeItemModal.addEventListener("click", closeItemDetails);
 elements.detailAddStock.addEventListener("click", () => {
   goToIncomingItem(elements.detailAddStock.dataset.addStockId);
 });
+elements.detailEditItem.addEventListener("click", openEditItem);
+elements.detailLifecycleItem.addEventListener("click", openItemLifecycle);
+elements.closeEditItem.addEventListener("click", closeEditItem);
+elements.editItemBack.addEventListener("click", closeEditItem);
+elements.editItemModal.addEventListener("click", (event) => {
+  if (event.target === elements.editItemModal) closeEditItem();
+});
+elements.editItemForm.addEventListener("submit", submitItemEdit);
+elements.closeItemLifecycle.addEventListener("click", closeItemLifecycle);
+elements.itemLifecycleBack.addEventListener("click", closeItemLifecycle);
+elements.itemLifecycleModal.addEventListener("click", (event) => {
+  if (event.target === elements.itemLifecycleModal) closeItemLifecycle();
+});
+elements.itemLifecycleForm.addEventListener("submit", submitItemLifecycle);
 elements.itemModal.addEventListener("click", (event) => {
   if (event.target === elements.itemModal) closeItemDetails();
 });
