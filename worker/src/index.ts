@@ -435,9 +435,9 @@ function validateIncomingTransaction(value: unknown): IncomingTransactionPayload
 		itemId: requiredText(body.itemId, "Item", 80),
 		kuantiti: requiredNumber(body.kuantiti, "Kuantiti", false, 1_000_000_000),
 		kosSeunit: requiredNumber(body.kosSeunit, "Kos seunit", true, 1_000_000_000, true),
-		pihakTerlibat: requiredText(body.pihakTerlibat, "Pihak terlibat", 160),
-		bahagian: requiredText(body.bahagian, "Bahagian", 120),
-		tujuan: requiredText(body.tujuan, "Tujuan", 300),
+		pihakTerlibat: requiredText(body.pihakTerlibat, "Pihak terlibat", 160, true),
+		bahagian: requiredText(body.bahagian, "Bahagian", 120, true),
+		tujuan: requiredText(body.tujuan, "Tujuan", 300, true),
 		catatan: requiredText(body.catatan, "Catatan", 1000, true),
 	};
 }

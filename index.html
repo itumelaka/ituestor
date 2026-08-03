@@ -339,7 +339,7 @@
               </div>
             </div>
 
-            <div class="form-section form-grid">
+            <div class="form-section form-grid incoming-details-grid">
               <h2 class="field-wide">Butiran penerimaan</h2>
               <label>
                 <span>Kuantiti <b aria-hidden="true">*</b></span>
@@ -349,20 +349,8 @@
                 <span>Kos seunit (RM) <b aria-hidden="true">*</b></span>
                 <input id="incomingUnitCost" type="number" min="0" max="1000000000" step="0.01" inputmode="decimal" required>
               </label>
-              <label>
-                <span>Pihak terlibat <b aria-hidden="true">*</b></span>
-                <input id="incomingParty" type="text" maxlength="160" required>
-              </label>
-              <label>
-                <span>Bahagian <b aria-hidden="true">*</b></span>
-                <input id="incomingDivision" type="text" maxlength="120" required>
-              </label>
-              <label class="field-wide">
-                <span>Tujuan <b aria-hidden="true">*</b></span>
-                <input id="incomingPurpose" type="text" maxlength="300" required>
-              </label>
-              <label class="field-wide">
-                <span>Catatan</span>
+              <label class="field-wide incoming-notes-field">
+                <span>Catatan <small>(pilihan)</small></span>
                 <textarea id="incomingNotes" maxlength="1000" rows="4"></textarea>
               </label>
             </div>

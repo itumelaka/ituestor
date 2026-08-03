@@ -115,9 +115,6 @@ const elements = {
   registerMissingItem: document.getElementById("registerMissingItem"),
   incomingQuantity: document.getElementById("incomingQuantity"),
   incomingUnitCost: document.getElementById("incomingUnitCost"),
-  incomingParty: document.getElementById("incomingParty"),
-  incomingDivision: document.getElementById("incomingDivision"),
-  incomingPurpose: document.getElementById("incomingPurpose"),
   incomingNotes: document.getElementById("incomingNotes"),
   incomingTotal: document.getElementById("incomingTotal"),
   incomingSubmit: document.getElementById("incomingSubmit")
@@ -361,9 +358,6 @@ function incomingPayload() {
     itemId: elements.incomingItem.value,
     kuantiti: Number(elements.incomingQuantity.value),
     kosSeunit: Number(elements.incomingUnitCost.value),
-    pihakTerlibat: elements.incomingParty.value.trim(),
-    bahagian: elements.incomingDivision.value.trim(),
-    tujuan: elements.incomingPurpose.value.trim(),
     catatan: elements.incomingNotes.value.trim()
   };
 }
@@ -471,9 +465,6 @@ async function submitIncomingTransaction(event) {
     incomingAttemptKey = "";
     incomingAttemptFingerprint = "";
     elements.incomingQuantity.value = "";
-    elements.incomingParty.value = "";
-    elements.incomingDivision.value = "";
-    elements.incomingPurpose.value = "";
     elements.incomingNotes.value = "";
     markIncomingMaterialChange();
     await refreshInventoryData();
@@ -1273,8 +1264,7 @@ elements.incomingItem.addEventListener("change", () => {
   markIncomingMaterialChange();
 });
 [
-  elements.incomingQuantity, elements.incomingUnitCost, elements.incomingParty,
-  elements.incomingDivision, elements.incomingPurpose, elements.incomingNotes
+  elements.incomingQuantity, elements.incomingUnitCost, elements.incomingNotes
 ].forEach((control) => control.addEventListener("input", markIncomingMaterialChange));
 elements.incomingForm.addEventListener("submit", submitIncomingTransaction);
 elements.retryIncoming.addEventListener("click", submitIncomingTransaction);

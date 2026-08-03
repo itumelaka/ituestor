@@ -347,14 +347,17 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
 .form-section h2, .incoming-guide h2 { margin: 0 0 14px; font-size: 15px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .form-grid h2 { margin-bottom: 0; }
+.incoming-details-grid { gap: 16px; }
 .incoming-form label { display: grid; gap: 6px; color: #4a3b31; font-size: 10px; font-weight: 900; }
 .incoming-form label > span b { color: var(--red); }
+.incoming-form label > span small { color: var(--muted); font-size: 9px; font-weight: 700; }
 .incoming-form input, .incoming-form select, .incoming-form textarea {
   width: 100%; min-height: 43px; padding: 10px 12px; color: #2b2622; background: #fffdf9;
   border: 1px solid #dcd0c4; border-radius: 11px; box-shadow: inset 1px 2px 4px rgba(66,50,36,.07);
   font: inherit; font-size: 12px;
 }
 .incoming-form textarea { min-height: 96px; resize: vertical; }
+.incoming-notes-field textarea { min-height: 116px; }
 .incoming-form input:focus-visible, .incoming-form select:focus-visible,
 .incoming-form textarea:focus-visible, .incoming-submit button:focus-visible {
   outline: 3px solid rgba(32,104,174,.25); outline-offset: 2px; border-color: var(--blue);

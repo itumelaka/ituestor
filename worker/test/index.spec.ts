@@ -344,9 +344,6 @@ function incomingBody(overrides: Record<string, unknown> = {}): string {
 		itemId: "AT-0001",
 		kuantiti: 5,
 		kosSeunit: 12.5,
-		pihakTerlibat: "Pembekal Ujian",
-		bahagian: "Stor",
-		tujuan: "Bekalan operasi",
 		catatan: "Dokumen DO-001",
 		...overrides,
 	});
@@ -1228,6 +1225,10 @@ describe("ITU eSTOR Worker", () => {
 			kuantiti: 5,
 			kosSeunit: 12.5,
 			jumlahNilai: 62.5,
+			pihakTerlibat: "",
+			bahagian: "",
+			tujuan: "",
+			catatan: "Dokumen DO-001",
 			createdByEmail: TEST_USER_EMAIL,
 			createdByName: "ITU Melaka",
 			status: "SAH",
@@ -1245,6 +1246,10 @@ describe("ITU eSTOR Worker", () => {
 			KUANTITI: 5,
 			KOS_SEUNIT: 12.5,
 			JUMLAH_NILAI: 62.5,
+			PIHAK_TERLIBAT: "",
+			BAHAGIAN: "",
+			TUJUAN: "",
+			CATATAN: "Dokumen DO-001",
 			CREATED_BY_EMAIL: TEST_USER_EMAIL,
 			CREATED_BY_NAME: "ITU Melaka",
 			STATUS: "SAH",
@@ -1260,6 +1265,100 @@ describe("ITU eSTOR Worker", () => {
 		const claimSegment = assertion.split(".")[1] ?? "";
 		const claims = JSON.parse(atob(claimSegment.replace(/-/g, "+").replace(/_/g, "/")));
 		expect(claims.scope).toBe("https://www.googleapis.com/auth/spreadsheets");
+	});
+
+	it("accepts the minimal payload when catatan is omitted", async () => {
+		const transactions: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions });
+
+		const response = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody({ catatan: undefined }),
+		);
+		const body = await response.json<{
+			transaction: Record<string, unknown>;
+		}>();
+
+		expect(response.status).toBe(201);
+		expect(body.transaction).toMatchObject({
+			itemId: "AT-0001",
+			kuantiti: 5,
+			kosSeunit: 12.5,
+			pihakTerlibat: "",
+			bahagian: "",
+			tujuan: "",
+			catatan: "",
+		});
+		const stored = Object.fromEntries(
+			TRANSACTION_HEADERS.map((header, index) => [header, transactions[0]?.[index]]),
+		);
+		expect(stored).toMatchObject({
+			PIHAK_TERLIBAT: "",
+			BAHAGIAN: "",
+			TUJUAN: "",
+			CATATAN: "",
+		});
+	});
+
+	it("accepts and safely normalizes fields from an older client", async () => {
+		const transactions: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions });
+
+		const response = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody({
+				pihakTerlibat: "  Pembekal Lama  ",
+				bahagian: "  Stor Utama  ",
+				tujuan: "  Bekalan operasi  ",
+			}),
+		);
+		const body = await response.json<{
+			transaction: Record<string, unknown>;
+		}>();
+
+		expect(response.status).toBe(201);
+		expect(body.transaction).toMatchObject({
+			pihakTerlibat: "Pembekal Lama",
+			bahagian: "Stor Utama",
+			tujuan: "Bekalan operasi",
+		});
+		const stored = Object.fromEntries(
+			TRANSACTION_HEADERS.map((header, index) => [header, transactions[0]?.[index]]),
+		);
+		expect(stored).toMatchObject({
+			PIHAK_TERLIBAT: "Pembekal Lama",
+			BAHAGIAN: "Stor Utama",
+			TUJUAN: "Bekalan operasi",
+		});
+	});
+
+	it("treats omitted legacy fields and explicit empty strings as the same idempotent payload", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+
+		const first = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody(),
+		);
+		const replay = await dispatch(
+			"/api/transactions/in",
+			"POST",
+			incomingHeaders(),
+			incomingBody({ pihakTerlibat: "", bahagian: "", tujuan: "" }),
+		);
+
+		expect(first.status).toBe(201);
+		expect(replay.status).toBe(200);
+		expect((await replay.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
 	});
 
 	it.each([
