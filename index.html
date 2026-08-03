@@ -48,6 +48,7 @@
         <a class="nav-link active" href="#dashboard" aria-current="page"><span>🏠</span>Dashboard</a>
         <a class="nav-link" href="#daftar-item"><span>📋</span>Daftar Item</a>
         <a class="nav-link" href="#barang-masuk"><span>📥</span>Barang Masuk</a>
+        <a class="nav-link" href="#transaksi"><span>↕️</span>Transaksi</a>
         <a class="nav-link" href="#barang-keluar"><span>📤</span>Barang Keluar</a>
         <a class="nav-link" href="#permohonan"><span>📝</span>Permohonan</a>
         <a class="nav-link" href="#stok-semasa"><span>📦</span>Stok Semasa</a>
@@ -113,7 +114,7 @@
           <article class="stat yellow"><div><span>STOK RENDAH</span><strong id="lowStockCount">—</strong><small>Item</small></div><i>⚠️</i></article>
           <article class="stat red"><div><span>STOK HABIS</span><strong id="outOfStockCount">—</strong><small>Item</small></div><i>❌</i></article>
           <article class="stat purple"><div><span>PERMOHONAN MENUNGGU</span><strong class="inactive-value">Belum aktif</strong><small>Modul permohonan</small></div><i>📋</i></article>
-          <article class="stat sky"><div><span>TRANSAKSI HARI INI</span><strong class="inactive-value">Belum aktif</strong><small>Lejar transaksi</small></div><i>↕️</i></article>
+          <article class="stat sky"><div><span>TRANSAKSI HARI INI</span><strong id="todayTransactionCount">—</strong><small>Transaksi SAH</small></div><i>↕️</i></article>
         </section>
 
         <section class="panel-grid">
@@ -143,7 +144,7 @@
             <div class="table-wrap">
               <table>
                 <thead><tr><th>TARIKH &amp; MASA</th><th>JENIS</th><th>ITEM</th><th>KUANTITI</th><th>OLEH</th></tr></thead>
-                <tbody><tr><td colspan="5" class="empty-state">Paparan transaksi terkini belum tersedia</td></tr></tbody>
+                <tbody id="recentTransactionRows"><tr><td colspan="5" class="empty-state">Memuatkan transaksi terkini…</td></tr></tbody>
               </table>
             </div>
             <a href="#transaksi">Lihat semua transaksi</a>
@@ -373,6 +374,54 @@
           </aside>
         </section>
       </main>
+
+      <main id="transaksi" class="page-view transaction-register" hidden>
+        <section class="register-heading">
+          <div>
+            <p class="eyebrow">LEJAR INVENTORI</p>
+            <h1>Transaksi</h1>
+            <p>Sejarah pergerakan stok sebenar. Transaksi dibatalkan kekal dalam lejar untuk jejak audit.</p>
+          </div>
+          <span class="register-icon" aria-hidden="true">↕️</span>
+        </section>
+
+        <div class="data-state is-loading" id="transactionState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="transactionStateMessage">Memuatkan transaksi…</span>
+          <button id="retryTransactions" type="button" hidden>Cuba lagi</button>
+        </div>
+
+        <section class="register-controls transaction-controls" aria-label="Carian dan penapis transaksi">
+          <label class="control-search">
+            <span>Cari transaksi</span>
+            <input id="transactionSearch" type="search" placeholder="ID transaksi, item atau pencipta" autocomplete="off">
+          </label>
+          <label>
+            <span>Status</span>
+            <select id="transactionStatusFilter">
+              <option value="">Semua status</option>
+              <option value="SAH">SAH</option>
+              <option value="DIBATALKAN">DIBATALKAN</option>
+              <option value="DRAF">DRAF</option>
+            </select>
+          </label>
+          <label>
+            <span>Jenis</span>
+            <select id="transactionTypeFilter"><option value="">Semua jenis</option></select>
+          </label>
+        </section>
+
+        <section class="register-results" aria-labelledby="transactionSummary">
+          <div class="result-bar"><p id="transactionSummary">Menunggu data transaksi…</p></div>
+          <div class="register-table-wrap">
+            <table class="register-table transaction-table">
+              <thead><tr><th>ID TRANSAKSI</th><th>TARIKH &amp; MASA</th><th>ITEM</th><th>JENIS</th><th>KUANTITI</th><th>JUMLAH NILAI</th><th>DICIPTA OLEH</th><th>STATUS</th></tr></thead>
+              <tbody id="transactionRows"><tr><td colspan="8" class="empty-state">Menunggu data transaksi…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="item-cards transaction-cards" id="transactionCards"></div>
+        </section>
+      </main>
     </div>
   </div>
 
@@ -386,6 +435,40 @@
       <div class="modal-actions">
         <button id="detailAddStock" class="add-stock-action" type="button" hidden>Tambah Stok</button>
       </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="transactionModal" hidden>
+    <section class="item-modal transaction-modal" role="dialog" aria-modal="true" aria-labelledby="transactionModalTitle">
+      <div class="modal-heading">
+        <div><p class="eyebrow">BUTIRAN TRANSAKSI</p><h2 id="transactionModalTitle">Transaksi</h2></div>
+        <button id="closeTransactionModal" class="modal-close" type="button" aria-label="Tutup butiran transaksi">×</button>
+      </div>
+      <dl id="transactionDetails" class="item-details"></dl>
+      <div class="modal-actions">
+        <button id="cancelTransactionButton" class="cancel-transaction-action" type="button" hidden>Batalkan Transaksi</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="cancelTransactionModal" hidden>
+    <section class="item-modal cancel-transaction-modal" role="dialog" aria-modal="true" aria-labelledby="cancelTransactionTitle">
+      <div class="modal-heading">
+        <div><p class="eyebrow">PENGESAHAN PEMBATALAN</p><h2 id="cancelTransactionTitle">Batalkan Transaksi</h2></div>
+        <button id="closeCancelTransaction" class="modal-close" type="button" aria-label="Tutup pengesahan pembatalan">×</button>
+      </div>
+      <p class="cancel-warning">Transaksi tidak akan dipadam. Status akan ditukar kepada DIBATALKAN dan kesannya terhadap stok akan dibuang.</p>
+      <div class="data-state is-ready" id="cancelTransactionState" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span><span id="cancelTransactionStateMessage"></span>
+      </div>
+      <form id="cancelTransactionForm" class="cancel-transaction-form">
+        <label for="cancelTransactionReason">Sebab pembatalan <b aria-hidden="true">*</b></label>
+        <textarea id="cancelTransactionReason" minlength="5" maxlength="500" rows="4" required></textarea>
+        <div class="cancel-actions">
+          <button id="cancelTransactionBack" type="button">Kembali</button>
+          <button id="confirmCancelTransaction" class="cancel-transaction-action" type="submit">Sahkan Pembatalan</button>
+        </div>
+      </form>
     </section>
   </div>
 

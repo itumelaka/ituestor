@@ -648,3 +648,36 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.transaction-controls { grid-template-columns: minmax(260px, 2fr) repeat(2, minmax(150px, 1fr)); }
+.transaction-table { min-width: 1040px; }
+.transaction-table td:nth-child(3) { min-width: 210px; }
+.transaction-table tbody tr { cursor: pointer; }
+.transaction-status-cancelled { color: #7f2c25; background: #f8d8d2; }
+.transaction-status-valid { color: #285c35; background: #dcefd8; }
+.transaction-card-details { width: 100%; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.transaction-modal { max-width: 780px; }
+.cancel-transaction-action {
+  min-height: 42px; padding: 10px 18px; border: 0; border-radius: 14px; color: #fff;
+  background: linear-gradient(145deg, #dc5548, #a82f27); box-shadow: 0 5px 0 #76231e, 0 9px 15px rgba(91,30,25,.22);
+  font-size: 10px; font-weight: 900; text-transform: uppercase; cursor: pointer;
+}
+.cancel-transaction-action:disabled { cursor: wait; filter: grayscale(.25); opacity: .7; }
+.cancel-warning { padding: 14px 16px; border: 1px solid #efb7ae; border-radius: 15px; color: #742820; background: #fbe3df; font-weight: 750; line-height: 1.55; }
+.cancel-transaction-form { display: grid; gap: 10px; margin-top: 15px; }
+.cancel-transaction-form label { color: #3e3a36; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.cancel-transaction-form textarea { width: 100%; min-height: 110px; resize: vertical; }
+.cancel-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 5px; }
+.cancel-actions #cancelTransactionBack { min-height: 42px; padding: 10px 17px; border: 1px solid #c7beb5; border-radius: 14px; background: #fff; font-weight: 850; cursor: pointer; }
+
+@media (max-width: 720px) {
+  .transaction-controls { grid-template-columns: 1fr 1fr; }
+  .transaction-controls .control-search { grid-column: 1 / -1; }
+}
+
+@media (max-width: 440px) {
+  .transaction-controls { grid-template-columns: 1fr; }
+  .transaction-controls .control-search { grid-column: auto; }
+  .cancel-actions { align-items: stretch; flex-direction: column-reverse; }
+  .cancel-actions button { width: 100%; }
+}

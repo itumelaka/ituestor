@@ -40,6 +40,12 @@ let createItemAttemptKey = "";
 let createItemAttemptFingerprint = "";
 let createItemSubmitting = false;
 let createdItemForIncoming = null;
+let loadedTransactions = [];
+let transactionsRequest = null;
+let transactionsLoaded = false;
+let openedTransactionId = "";
+let lastFocusedTransaction = null;
+let cancellationSubmitting = false;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -56,6 +62,7 @@ const elements = {
   dashboardView: document.getElementById("dashboard"),
   registerView: document.getElementById("daftar-item"),
   incomingView: document.getElementById("barang-masuk"),
+  transactionView: document.getElementById("transaksi"),
   registerDataState: document.getElementById("registerDataState"),
   registerStateMessage: document.getElementById("registerStateMessage"),
   registerRetry: document.getElementById("registerRetry"),
@@ -117,7 +124,31 @@ const elements = {
   incomingUnitCost: document.getElementById("incomingUnitCost"),
   incomingNotes: document.getElementById("incomingNotes"),
   incomingTotal: document.getElementById("incomingTotal"),
-  incomingSubmit: document.getElementById("incomingSubmit")
+  incomingSubmit: document.getElementById("incomingSubmit"),
+  todayTransactionCount: document.getElementById("todayTransactionCount"),
+  recentTransactionRows: document.getElementById("recentTransactionRows"),
+  transactionState: document.getElementById("transactionState"),
+  transactionStateMessage: document.getElementById("transactionStateMessage"),
+  retryTransactions: document.getElementById("retryTransactions"),
+  transactionSearch: document.getElementById("transactionSearch"),
+  transactionStatusFilter: document.getElementById("transactionStatusFilter"),
+  transactionTypeFilter: document.getElementById("transactionTypeFilter"),
+  transactionSummary: document.getElementById("transactionSummary"),
+  transactionRows: document.getElementById("transactionRows"),
+  transactionCards: document.getElementById("transactionCards"),
+  transactionModal: document.getElementById("transactionModal"),
+  transactionModalTitle: document.getElementById("transactionModalTitle"),
+  transactionDetails: document.getElementById("transactionDetails"),
+  closeTransactionModal: document.getElementById("closeTransactionModal"),
+  cancelTransactionButton: document.getElementById("cancelTransactionButton"),
+  cancelTransactionModal: document.getElementById("cancelTransactionModal"),
+  closeCancelTransaction: document.getElementById("closeCancelTransaction"),
+  cancelTransactionForm: document.getElementById("cancelTransactionForm"),
+  cancelTransactionReason: document.getElementById("cancelTransactionReason"),
+  cancelTransactionState: document.getElementById("cancelTransactionState"),
+  cancelTransactionStateMessage: document.getElementById("cancelTransactionStateMessage"),
+  cancelTransactionBack: document.getElementById("cancelTransactionBack"),
+  confirmCancelTransaction: document.getElementById("confirmCancelTransaction")
 };
 
 const currencyFormatter = new Intl.NumberFormat("ms-MY", {
@@ -173,12 +204,27 @@ function setCreateItemState(state, message, retry = false) {
   elements.retryCreateItem.hidden = !retry;
 }
 
+function setTransactionState(state, message, retry = false) {
+  elements.transactionState.className = `data-state is-${state}`;
+  elements.transactionStateMessage.textContent = message;
+  elements.retryTransactions.hidden = !retry;
+}
+
+function setCancellationState(state, message) {
+  elements.cancelTransactionState.className = `data-state is-${state}`;
+  elements.cancelTransactionStateMessage.textContent = message;
+}
+
 function canCreateItem() {
   return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
 
 function canAddStock() {
   return ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(currentApplicationUser?.role);
+}
+
+function canCancelTransactions() {
+  return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
 
 function itemNumbers(item) {
@@ -249,6 +295,220 @@ function renderDashboard(items, apiCount) {
   elements.outOfStockCount.textContent = out.toLocaleString("ms-MY");
   renderCategories(items);
   renderStockAlerts(items);
+}
+
+function transactionNumber(value, fieldName, transaction) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) {
+    console.warn(`Nilai ${fieldName} tidak sah untuk transaksi ${transaction.transactionId || "(tanpa ID)"}; nilai tidak dipaparkan.`);
+    return { valid: false, value: 0 };
+  }
+  return { valid: true, value: number };
+}
+
+function formatTransactionDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value || "—";
+  return new Intl.DateTimeFormat("ms-MY", {
+    timeZone: "Asia/Kuala_Lumpur", dateStyle: "medium", timeStyle: "short"
+  }).format(date);
+}
+
+function transactionStatusClass(status) {
+  if (status === "DIBATALKAN") return "transaction-status-cancelled";
+  if (status === "SAH") return "transaction-status-valid";
+  return "";
+}
+
+function renderRecentTransactions() {
+  const recent = loadedTransactions.filter((transaction) => transaction.status === "SAH").slice(0, 5);
+  if (!recent.length) {
+    elements.recentTransactionRows.innerHTML = '<tr><td colspan="5" class="empty-state">Tiada transaksi SAH terkini.</td></tr>';
+    return;
+  }
+  elements.recentTransactionRows.innerHTML = recent.map((transaction) => {
+    const quantity = transactionNumber(transaction.kuantiti, "kuantiti", transaction);
+    return `<tr><td>${escapeHtml(formatTransactionDate(transaction.timestamp))}</td><td>${escapeHtml(transaction.jenis || "—")}</td><td>${escapeHtml(transaction.itemName || transaction.itemId || "Item tidak tersedia")}</td><td>${formatNumber(quantity)}</td><td>${escapeHtml(transaction.createdByName || transaction.createdByEmail || "—")}</td></tr>`;
+  }).join("");
+}
+
+function filteredTransactions() {
+  const query = elements.transactionSearch.value.trim().toLocaleLowerCase("ms");
+  const status = elements.transactionStatusFilter.value;
+  const type = elements.transactionTypeFilter.value;
+  return loadedTransactions.filter((transaction) => {
+    const matchesSearch = !query || [
+      transaction.transactionId, transaction.itemId, transaction.itemName,
+      transaction.kategori, transaction.unit, transaction.createdByName,
+      transaction.createdByEmail, transaction.catatan
+    ].some((value) => String(value ?? "").toLocaleLowerCase("ms").includes(query));
+    return matchesSearch && (!status || transaction.status === status) &&
+      (!type || transaction.jenis === type);
+  });
+}
+
+function renderTransactionRecord(transaction, card = false) {
+  const id = escapeHtml(transaction.transactionId || "—");
+  const item = escapeHtml(transaction.itemName || transaction.itemId || "Item tidak tersedia");
+  const itemId = escapeHtml(transaction.itemId || "—");
+  const type = escapeHtml(transaction.jenis || "—");
+  const status = escapeHtml(transaction.status || "—");
+  const quantity = transactionNumber(transaction.kuantiti, "kuantiti", transaction);
+  const amount = transactionNumber(transaction.jumlahNilai, "jumlahNilai", transaction);
+  const creator = escapeHtml(transaction.createdByName || transaction.createdByEmail || "—");
+  const date = escapeHtml(formatTransactionDate(transaction.timestamp));
+  const badgeClass = transactionStatusClass(transaction.status);
+  if (card) {
+    return `<article class="item-card"><button class="transaction-card-details" type="button" data-transaction-id="${id}" aria-label="Lihat transaksi ${id}">
+      <span class="item-card-head"><span><small>${id}</small><h3>${item}</h3></span><b class="status-badge ${badgeClass}">${status}</b></span>
+      <span class="item-card-grid"><span>Tarikh<strong>${date}</strong></span><span>Item ID<strong>${itemId}</strong></span><span>Jenis<strong>${type}</strong></span><span>Kuantiti<strong>${formatNumber(quantity)}</strong></span><span>Jumlah nilai<strong>${formatCurrency(amount)}</strong></span><span>Dicipta oleh<strong>${creator}</strong></span></span>
+    </button></article>`;
+  }
+  return `<tr tabindex="0" data-transaction-id="${id}" aria-label="Lihat transaksi ${id}"><td>${id}</td><td>${date}</td><td>${item}<small class="table-subline">${itemId}</small></td><td>${type}</td><td class="number-cell">${formatNumber(quantity)}</td><td class="money">${formatCurrency(amount)}</td><td>${creator}</td><td><b class="status-badge ${badgeClass}">${status}</b></td></tr>`;
+}
+
+function populateTransactionTypes() {
+  const current = elements.transactionTypeFilter.value;
+  const types = [...new Set(loadedTransactions.map((transaction) => transaction.jenis).filter(Boolean))].sort(textCollator.compare);
+  elements.transactionTypeFilter.innerHTML = '<option value="">Semua jenis</option>' +
+    types.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+  if (types.includes(current)) elements.transactionTypeFilter.value = current;
+}
+
+function renderTransactions() {
+  const matches = filteredTransactions();
+  elements.transactionSummary.textContent = loadedTransactions.length
+    ? `${matches.length.toLocaleString("ms-MY")} daripada ${loadedTransactions.length.toLocaleString("ms-MY")} transaksi`
+    : "0 transaksi";
+  if (!loadedTransactions.length) {
+    elements.transactionRows.innerHTML = '<tr><td colspan="8" class="empty-state">Tiada transaksi tersedia.</td></tr>';
+    elements.transactionCards.innerHTML = '<p class="empty-state">Tiada transaksi tersedia.</p>';
+    return;
+  }
+  if (!matches.length) {
+    const message = "Tiada transaksi sepadan dengan carian atau penapis semasa.";
+    elements.transactionRows.innerHTML = `<tr><td colspan="8" class="empty-state">${message}</td></tr>`;
+    elements.transactionCards.innerHTML = `<p class="empty-state">${message}</p>`;
+    return;
+  }
+  elements.transactionRows.innerHTML = matches.map((transaction) => renderTransactionRecord(transaction)).join("");
+  elements.transactionCards.innerHTML = matches.map((transaction) => renderTransactionRecord(transaction, true)).join("");
+}
+
+function renderTransactionDetails(transaction) {
+  const quantity = transactionNumber(transaction.kuantiti, "kuantiti", transaction);
+  const cost = transactionNumber(transaction.kosSeunit, "kosSeunit", transaction);
+  const amount = transactionNumber(transaction.jumlahNilai, "jumlahNilai", transaction);
+  const fields = [
+    ["ID transaksi", transaction.transactionId], ["Tarikh dan masa", formatTransactionDate(transaction.timestamp)],
+    ["Item ID", transaction.itemId], ["Nama item", transaction.itemName], ["Kategori", transaction.kategori],
+    ["Unit", transaction.unit], ["Jenis", transaction.jenis], ["Kuantiti", formatNumber(quantity)],
+    ["Kos seunit", formatCurrency(cost)], ["Jumlah nilai", formatCurrency(amount)],
+    ["Pihak terlibat", transaction.pihakTerlibat || "—"], ["Bahagian", transaction.bahagian || "—"],
+    ["Tujuan", transaction.tujuan || "—"], ["Catatan", transaction.catatan || "—"],
+    ["Dicipta oleh", transaction.createdByName || "—"], ["E-mel pencipta", transaction.createdByEmail || "—"],
+    ["Status", transaction.status]
+  ];
+  elements.transactionModalTitle.textContent = transaction.transactionId || "Butiran transaksi";
+  elements.transactionDetails.innerHTML = fields.map(([label, value], index) =>
+    `<div class="${[3, 13].includes(index) ? "detail-wide" : ""}"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`
+  ).join("");
+  elements.cancelTransactionButton.hidden = !(transaction.status === "SAH" && canCancelTransactions());
+  elements.cancelTransactionButton.dataset.transactionId = transaction.transactionId || "";
+}
+
+function openTransactionDetails(transactionId, trigger) {
+  const transaction = loadedTransactions.find((candidate) => candidate.transactionId === transactionId);
+  if (!transaction) return;
+  renderTransactionDetails(transaction);
+  openedTransactionId = transactionId;
+  lastFocusedTransaction = trigger;
+  elements.transactionModal.hidden = false;
+  document.body.style.overflow = "hidden";
+  elements.closeTransactionModal.focus();
+}
+
+function closeTransactionDetails() {
+  if (elements.transactionModal.hidden) return;
+  elements.transactionModal.hidden = true;
+  openedTransactionId = "";
+  document.body.style.overflow = "";
+  if (lastFocusedTransaction) lastFocusedTransaction.focus();
+}
+
+function openCancellationDialog() {
+  if (!canCancelTransactions() || !openedTransactionId) return;
+  elements.cancelTransactionReason.value = "";
+  setCancellationState("ready", "");
+  elements.cancelTransactionModal.hidden = false;
+  elements.cancelTransactionReason.focus();
+}
+
+function closeCancellationDialog() {
+  if (cancellationSubmitting) return;
+  elements.cancelTransactionModal.hidden = true;
+  setCancellationState("ready", "");
+  elements.cancelTransactionButton.focus();
+}
+
+function cancellationErrorMessage(status, code) {
+  if (status === 401) return "Sesi anda telah tamat. Log keluar dan masuk semula.";
+  const messages = {
+    ROLE_NOT_ALLOWED: "Peranan anda tidak dibenarkan membatalkan transaksi.",
+    TRANSACTION_NOT_FOUND: "Transaksi tidak ditemui.",
+    TRANSACTION_ALREADY_CANCELLED: "Transaksi ini telah dibatalkan oleh permintaan terdahulu.",
+    TRANSACTION_NOT_CANCELLABLE: "Status transaksi ini tidak boleh dibatalkan.",
+    CANCELLATION_CONFLICT: "Transaksi berubah ketika pembatalan diproses. Muat semula dan semak statusnya.",
+    VALIDATION_ERROR: "Masukkan sebab pembatalan sekurang-kurangnya 5 aksara.",
+    WRITE_FAILED: "Pembatalan belum dapat disahkan. Cuba semula dengan sebab yang sama."
+  };
+  return messages[code] || "Transaksi tidak dapat dibatalkan buat masa ini.";
+}
+
+async function submitCancellation(event) {
+  event.preventDefault();
+  if (cancellationSubmitting || !accessGranted || !openedTransactionId) return;
+  if (!elements.cancelTransactionForm.reportValidity()) return;
+  if (!canCancelTransactions()) {
+    setCancellationState("error", "Peranan anda tidak dibenarkan membatalkan transaksi.");
+    return;
+  }
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) {
+    showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+    return;
+  }
+  cancellationSubmitting = true;
+  elements.confirmCancelTransaction.disabled = true;
+  elements.confirmCancelTransaction.textContent = "Sedang membatalkan…";
+  setCancellationState("loading", "Mengemas kini status dan merekod audit…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/transactions/${encodeURIComponent(openedTransactionId)}/cancel`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${data.session.access_token}` },
+      body: JSON.stringify({ sebab: elements.cancelTransactionReason.value.trim() })
+    });
+    let result = {};
+    try { result = await response.json(); } catch { /* Gunakan mesej selamat lalai. */ }
+    if (response.status === 401) {
+      showAccessGate(cancellationErrorMessage(response.status, result.error), "logout");
+      return;
+    }
+    if (!response.ok || result.success !== true) {
+      setCancellationState("error", cancellationErrorMessage(response.status, result.error));
+      if (response.status === 409) await refreshTransactionsData();
+      return;
+    }
+    elements.cancelTransactionModal.hidden = true;
+    await Promise.all([refreshTransactionsData(), refreshInventoryData()]);
+    setTransactionState("success", `${result.replayed ? "Pembatalan disahkan semula" : "Transaksi berjaya dibatalkan"}: ${result.transaction?.transactionId || openedTransactionId}.`);
+  } catch {
+    setCancellationState("error", "Sambungan terputus. Cuba semula dengan sebab yang sama untuk mengesahkan pembatalan.");
+  } finally {
+    cancellationSubmitting = false;
+    elements.confirmCancelTransaction.disabled = false;
+    elements.confirmCancelTransaction.textContent = "Sahkan Pembatalan";
+  }
 }
 
 function filterItems() {
@@ -467,7 +727,7 @@ async function submitIncomingTransaction(event) {
     elements.incomingQuantity.value = "";
     elements.incomingNotes.value = "";
     markIncomingMaterialChange();
-    await refreshInventoryData();
+    await Promise.all([refreshInventoryData(), refreshTransactionsData()]);
   } catch {
     setIncomingState(
       "error",
@@ -795,14 +1055,16 @@ function renderRegister() {
 function showView(hash) {
   const register = hash === "#daftar-item";
   const incoming = hash === "#barang-masuk";
-  elements.dashboardView.hidden = register || incoming;
+  const transactions = hash === "#transaksi";
+  elements.dashboardView.hidden = register || incoming || transactions;
   elements.registerView.hidden = !register;
   elements.incomingView.hidden = !incoming;
-  const viewTitle = register ? "Daftar Item" : incoming ? "Barang Masuk" : "Dashboard";
+  elements.transactionView.hidden = !transactions;
+  const viewTitle = register ? "Daftar Item" : incoming ? "Barang Masuk" : transactions ? "Transaksi" : "Dashboard";
   document.title = `${viewTitle} | ITU eSTOR`;
-  searchBox.hidden = register || incoming;
+  searchBox.hidden = register || incoming || transactions;
   navLinks.forEach((link) => {
-    const target = register ? "#daftar-item" : incoming ? "#barang-masuk" : "#dashboard";
+    const target = register ? "#daftar-item" : incoming ? "#barang-masuk" : transactions ? "#transaksi" : "#dashboard";
     const active = link.getAttribute("href") === target;
     link.classList.toggle("active", active);
     if (active) link.setAttribute("aria-current", "page");
@@ -810,6 +1072,10 @@ function showView(hash) {
   });
   if (register && loadedItems.length) renderRegister();
   if (incoming && loadedItems.length) populateIncomingItems();
+  if (transactions) {
+    renderTransactions();
+    if (!transactionsLoaded && currentSession?.access_token) ensureTransactionsData(currentSession.access_token);
+  }
 }
 
 function renderItemDetails(item) {
@@ -902,6 +1168,10 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   createItemAttemptKey = "";
   createItemAttemptFingerprint = "";
   createdItemForIncoming = null;
+  loadedTransactions = [];
+  transactionsRequest = null;
+  transactionsLoaded = false;
+  openedTransactionId = "";
   elements.openCreateItem.hidden = true;
   elements.createItemPanel.hidden = true;
   elements.createItemSuccessActions.hidden = true;
@@ -1027,11 +1297,74 @@ async function checkApplicationAccess(session) {
 
     showAuthorizedUser(session, data.user);
     ensureInventoryData(session.access_token);
+    ensureTransactionsData(session.access_token);
   })().finally(() => {
     accessRequest = null;
   });
 
   return accessRequest;
+}
+
+function ensureTransactionsData(accessToken) {
+  if (!accessGranted || !accessToken) return null;
+  if (transactionsLoaded || transactionsRequest) return transactionsRequest;
+  transactionsRequest = loadTransactionsData(accessToken).finally(() => {
+    transactionsRequest = null;
+  });
+  return transactionsRequest;
+}
+
+async function loadTransactionsData(accessToken) {
+  if (!accessGranted || !accessToken) return false;
+  const hadTransactions = loadedTransactions.length > 0;
+  setTransactionState("loading", "Memuatkan transaksi sebenar…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/transactions?limit=500`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` }
+    });
+    let data = {};
+    try { data = await response.json(); } catch { /* Gunakan mesej selamat lalai. */ }
+    if (response.status === 401 || response.status === 403) {
+      showAccessGate(accessErrorMessage(response.status, data.error), "logout");
+      return false;
+    }
+    if (!response.ok || data.success !== true || !Array.isArray(data.transactions)) {
+      throw new Error("Respons transaksi tidak sah");
+    }
+    loadedTransactions = data.transactions.slice();
+    transactionsLoaded = true;
+    elements.todayTransactionCount.textContent = Number(data.summary?.todaySah || 0).toLocaleString("ms-MY");
+    populateTransactionTypes();
+    renderTransactions();
+    renderRecentTransactions();
+    if (!elements.transactionModal.hidden && openedTransactionId) {
+      const opened = loadedTransactions.find((transaction) => transaction.transactionId === openedTransactionId);
+      if (opened) renderTransactionDetails(opened);
+      else closeTransactionDetails();
+    }
+    setTransactionState(loadedTransactions.length ? "ready" : "empty", loadedTransactions.length ? "" : "Tiada transaksi tersedia.");
+    return true;
+  } catch (error) {
+    console.error("Data transaksi gagal dimuatkan.");
+    if (!hadTransactions) loadedTransactions = [];
+    transactionsLoaded = hadTransactions;
+    renderTransactions();
+    elements.todayTransactionCount.textContent = "—";
+    elements.recentTransactionRows.innerHTML = '<tr><td colspan="5" class="empty-state">Transaksi terkini tidak dapat dimuatkan.</td></tr>';
+    setTransactionState("error", hadTransactions ? "Data terkini tidak dapat dimuatkan; senarai terakhir masih dipaparkan." : "Transaksi tidak dapat dimuatkan buat masa ini.", true);
+    return false;
+  }
+}
+
+async function refreshTransactionsData() {
+  if (!supabaseClient || !accessGranted) return false;
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error || !data.session?.access_token) {
+    showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+    return false;
+  }
+  transactionsLoaded = false;
+  return await ensureTransactionsData(data.session.access_token);
 }
 
 async function signInWithGoogle() {
@@ -1214,12 +1547,20 @@ drawerBackdrop.addEventListener("click", () => toggleSidebar(false));
 navLinks.forEach((link) => {
   link.addEventListener("click", () => {
     const target = link.getAttribute("href");
-    if (target === "#dashboard" || target === "#daftar-item" || target === "#barang-masuk") showView(target);
+    if (["#dashboard", "#daftar-item", "#barang-masuk", "#transaksi"].includes(target)) showView(target);
     if (window.innerWidth <= 960) toggleSidebar(false);
   });
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.cancelTransactionModal.hidden && !cancellationSubmitting) {
+    closeCancellationDialog();
+    return;
+  }
+  if (event.key === "Escape" && !elements.transactionModal.hidden) {
+    closeTransactionDetails();
+    return;
+  }
   if (event.key === "Escape" && !elements.itemModal.hidden) {
     closeItemDetails();
     return;
@@ -1245,6 +1586,7 @@ searchInput.addEventListener("input", () => {
 
 elements.retryData.addEventListener("click", retryInventoryData);
 elements.registerRetry.addEventListener("click", retryInventoryData);
+elements.retryTransactions.addEventListener("click", refreshTransactionsData);
 elements.openCreateItem.addEventListener("click", () => openCreateItemPanel());
 elements.closeCreateItem.addEventListener("click", closeCreateItemPanel);
 [
@@ -1322,6 +1664,35 @@ elements.detailAddStock.addEventListener("click", () => {
 elements.itemModal.addEventListener("click", (event) => {
   if (event.target === elements.itemModal) closeItemDetails();
 });
+[
+  elements.transactionSearch, elements.transactionStatusFilter, elements.transactionTypeFilter
+].forEach((control) => control.addEventListener("input", renderTransactions));
+[elements.transactionRows, elements.transactionCards].forEach((container) => {
+  container.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-transaction-id]");
+    if (target) openTransactionDetails(target.dataset.transactionId, target);
+  });
+});
+elements.transactionRows.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    const target = event.target.closest("[data-transaction-id]");
+    if (target) {
+      event.preventDefault();
+      openTransactionDetails(target.dataset.transactionId, target);
+    }
+  }
+});
+elements.closeTransactionModal.addEventListener("click", closeTransactionDetails);
+elements.transactionModal.addEventListener("click", (event) => {
+  if (event.target === elements.transactionModal) closeTransactionDetails();
+});
+elements.cancelTransactionButton.addEventListener("click", openCancellationDialog);
+elements.closeCancelTransaction.addEventListener("click", closeCancellationDialog);
+elements.cancelTransactionBack.addEventListener("click", closeCancellationDialog);
+elements.cancelTransactionModal.addEventListener("click", (event) => {
+  if (event.target === elements.cancelTransactionModal) closeCancellationDialog();
+});
+elements.cancelTransactionForm.addEventListener("submit", submitCancellation);
 elements.googleLogin.addEventListener("click", signInWithGoogle);
 elements.logoutButton.addEventListener("click", signOut);
 elements.authRetry.addEventListener("click", () => {

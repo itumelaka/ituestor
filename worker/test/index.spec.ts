@@ -95,6 +95,7 @@ type AuthenticatedFetchOptions = {
 	itemHeaders?: string[];
 	transactionHeaders?: string[];
 	failTransactionRead?: boolean;
+	failStatusUpdate?: boolean;
 };
 
 const USERS_HEADERS = [
@@ -241,6 +242,23 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 			);
 			const decodedUrl = decodeURIComponent(url);
 
+			if (init?.method === "PUT" && decodedUrl.includes("/values/TRANSACTIONS!")) {
+				if (options.failStatusUpdate) {
+					return Response.json({ error: "write failed" }, { status: 500 });
+				}
+				const match = decodedUrl.match(/TRANSACTIONS!([A-Z]+)(\d+)/);
+				if (!match) throw new Error(`Julat kemas kini tidak sah: ${decodedUrl}`);
+				const columnIndex = [...match[1]].reduce(
+					(value, character) => value * 26 + character.charCodeAt(0) - 64,
+					0,
+				) - 1;
+				const rowIndex = Number(match[2]) - 2;
+				const body = JSON.parse(String(init?.body)) as { values: string[][] };
+				if (!transactions[rowIndex]) throw new Error("Baris transaksi tidak wujud.");
+				transactions[rowIndex][columnIndex] = String(body.values[0]?.[0] ?? "");
+				return Response.json({ updatedRows: 1, updatedCells: 1 });
+			}
+
 			if (decodedUrl.includes("/values/USERS!A:Z")) {
 				return Response.json({
 					range: "USERS!A1:G2",
@@ -337,6 +355,17 @@ function incomingHeaders(
 		"Content-Type": "application/json",
 		"Idempotency-Key": key,
 	};
+}
+
+function cancellationHeaders(): HeadersInit {
+	return {
+		...bearerHeaders(),
+		"Content-Type": "application/json",
+	};
+}
+
+function cancellationBody(sebab = "Kesilapan penerimaan stok"): string {
+	return JSON.stringify({ sebab });
 }
 
 function incomingBody(overrides: Record<string, unknown> = {}): string {
@@ -1502,6 +1531,209 @@ describe("ITU eSTOR Worker", () => {
 		expect(audits).toHaveLength(0);
 		expect(serialized).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
 		expect(serialized).not.toContain(testPrivateKey);
+	});
+
+	it("requires authentication for GET /api/transactions", async () => {
+		const response = await dispatch("/api/transactions");
+		const body = await response.json<{ error: string }>();
+		expect(response.status).toBe(401);
+		expect(body.error).toBe("AUTH_REQUIRED");
+	});
+
+	it("allows all four valid roles to read transactions", async () => {
+		for (const role of ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR", "VIEWER"]) {
+			mockAuthenticatedFetch({
+				user: activeUser({ role }),
+				inventoryRows: inventoryRows(1),
+				transactionRows: [transactionRow({ TRANSACTION_ID: `TXN-${role}` })],
+			});
+			const response = await dispatch("/api/transactions", "GET", bearerHeaders());
+			const body = await response.json<{ transactions: Array<Record<string, unknown>> }>();
+			expect(response.status).toBe(200);
+			expect(body.transactions).toHaveLength(1);
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("returns transactions newest first with item enrichment and safe unknown-item fallback", async () => {
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1),
+			transactionRows: [
+				transactionRow({ TRANSACTION_ID: "TXN-OLD", TIMESTAMP: "2026-08-01T08:00:00+08:00" }),
+				transactionRow({ TRANSACTION_ID: "TXN-NEW", TIMESTAMP: "2026-08-03T12:00:00+08:00" }),
+				transactionRow({ TRANSACTION_ID: "TXN-UNKNOWN", TIMESTAMP: "2026-08-02T09:00:00+08:00", ITEM_ID: "AT-9999" }),
+			],
+		});
+		const response = await dispatch("/api/transactions", "GET", bearerHeaders());
+		const body = await response.json<{ transactions: Array<Record<string, unknown>> }>();
+		expect(response.status).toBe(200);
+		expect(body.transactions.map((record) => record.transactionId)).toEqual(["TXN-NEW", "TXN-UNKNOWN", "TXN-OLD"]);
+		expect(body.transactions[0]).toMatchObject({ itemName: "Kertas A4 80gsm", kategori: "ALAT TULIS", unit: "RIM" });
+		expect(body.transactions[1]).toMatchObject({ itemId: "AT-9999", itemName: "Item tidak tersedia", kategori: "—", unit: "—" });
+	});
+
+	it("supports transaction search and exact status, type and item filters", async () => {
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(2),
+			transactionRows: [
+				transactionRow({ TRANSACTION_ID: "TXN-MASUK", ITEM_ID: "AT-0001", JENIS: "MASUK", STATUS: "SAH", CREATED_BY_NAME: "Pencipta Satu" }),
+				transactionRow({ TRANSACTION_ID: "TXN-KELUAR", ITEM_ID: "AT-0002", JENIS: "KELUAR", STATUS: "DIBATALKAN", CREATED_BY_NAME: "Pencipta Dua" }),
+			],
+		});
+		for (const [query, expected] of [
+			["search=kertas", ["TXN-MASUK"]],
+			["status=DIBATALKAN", ["TXN-KELUAR"]],
+			["jenis=MASUK", ["TXN-MASUK"]],
+			["itemId=AT-0002", ["TXN-KELUAR"]],
+		] as const) {
+			const response = await dispatch(`/api/transactions?${query}`, "GET", bearerHeaders());
+			const body = await response.json<{ transactions: Array<{ transactionId: string }> }>();
+			expect(response.status).toBe(200);
+			expect(body.transactions.map((record) => record.transactionId)).toEqual(expected);
+		}
+	});
+
+	it("enforces the safe transaction limit", async () => {
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1),
+			transactionRows: Array.from({ length: 550 }, (_, index) => transactionRow({ TRANSACTION_ID: `TXN-${String(index).padStart(4, "0")}` })),
+		});
+		const response = await dispatch("/api/transactions?limit=99999", "GET", bearerHeaders());
+		const body = await response.json<{ count: number; matched: number; limit: number; transactions: unknown[] }>();
+		expect(response.status).toBe(200);
+		expect(body.limit).toBe(500);
+		expect(body.count).toBe(500);
+		expect(body.matched).toBe(550);
+		expect(body.transactions).toHaveLength(500);
+	});
+
+	it("allows SUPER_ADMIN and ADMIN_STOR to cancel a SAH transaction", async () => {
+		for (const role of ["SUPER_ADMIN", "ADMIN_STOR"]) {
+			const transactions = [transactionRow({ TRANSACTION_ID: `TXN-CANCEL-${role}` })];
+			const audits: string[][] = [];
+			mockAuthenticatedFetch({ user: activeUser({ role }), transactionRows: transactions, auditRows: audits });
+			const response = await dispatch(`/api/transactions/TXN-CANCEL-${role}/cancel`, "POST", cancellationHeaders(), cancellationBody());
+			const body = await response.json<{ success: boolean; replayed: boolean; transaction: Record<string, unknown> }>();
+			expect(response.status).toBe(200);
+			expect(body).toMatchObject({ success: true, replayed: false, transaction: { status: "DIBATALKAN", cancelledByEmail: TEST_USER_EMAIL } });
+			expect(transactions[0][TRANSACTION_HEADERS.indexOf("STATUS")]).toBe("DIBATALKAN");
+			expect(audits).toHaveLength(1);
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("rejects PEMBANTU_STOR and VIEWER cancellation without a Sheets update", async () => {
+		for (const role of ["PEMBANTU_STOR", "VIEWER"]) {
+			const fetchMock = mockAuthenticatedFetch({ user: activeUser({ role }), transactionRows: [transactionRow({ TRANSACTION_ID: "TXN-LOCKED" })] });
+			const response = await dispatch("/api/transactions/TXN-LOCKED/cancel", "POST", cancellationHeaders(), cancellationBody());
+			const body = await response.json<{ error: string }>();
+			expect(response.status).toBe(403);
+			expect(body.error).toBe("ROLE_NOT_ALLOWED");
+			expect(fetchMock.mock.calls.some(([input, init]) => String(input).includes("sheets.googleapis.com") && init?.method === "PUT")).toBe(false);
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("rejects missing and DRAF transactions safely", async () => {
+		const cases = [
+			["TXN-MISSING", [], 404, "TRANSACTION_NOT_FOUND"],
+			["TXN-DRAF", [transactionRow({ TRANSACTION_ID: "TXN-DRAF", STATUS: "DRAF" })], 409, "TRANSACTION_NOT_CANCELLABLE"],
+		] as const;
+		for (const [id, transactionRows, status, code] of cases) {
+			mockAuthenticatedFetch({ transactionRows: [...transactionRows] });
+			const response = await dispatch(`/api/transactions/${id}/cancel`, "POST", cancellationHeaders(), cancellationBody());
+			const body = await response.json<{ error: string }>();
+			expect(response.status).toBe(status);
+			expect(body.error).toBe(code);
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("validates blank, short and overlong cancellation reasons", async () => {
+		for (const reason of ["", "abc", "x".repeat(501)]) {
+			mockAuthenticatedFetch({ transactionRows: [transactionRow({ TRANSACTION_ID: "TXN-REASON" })] });
+			const response = await dispatch("/api/transactions/TXN-REASON/cancel", "POST", cancellationHeaders(), cancellationBody(reason));
+			const body = await response.json<{ error: string }>();
+			expect(response.status).toBe(400);
+			expect(body.error).toBe("VALIDATION_ERROR");
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("updates only the STATUS cell, preserves the row and appends a safe CANCEL audit", async () => {
+		const original = transactionRow({ TRANSACTION_ID: "TXN-ONE-CELL", CATATAN: "Nilai asal", KUANTITI: 7, KOS_SEUNIT: 2.5, JUMLAH_NILAI: 17.5 });
+		const transactions = [original.slice()];
+		const audits: string[][] = [];
+		const fetchMock = mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+		const response = await dispatch("/api/transactions/TXN-ONE-CELL/cancel", "POST", cancellationHeaders(), cancellationBody("Dokumen penerimaan berganda"));
+		expect(response.status).toBe(200);
+		const statusIndex = TRANSACTION_HEADERS.indexOf("STATUS");
+		expect(transactions[0].filter((_, index) => index !== statusIndex)).toEqual(original.filter((_, index) => index !== statusIndex));
+		expect(transactions[0][statusIndex]).toBe("DIBATALKAN");
+		const updateCalls = fetchMock.mock.calls.filter(([input, init]) => String(input).includes("sheets.googleapis.com") && init?.method === "PUT");
+		expect(updateCalls).toHaveLength(1);
+		expect(decodeURIComponent(String(updateCalls[0][0]))).toContain("TRANSACTIONS!N2");
+		expect(JSON.parse(String(updateCalls[0][1]?.body))).toEqual({ majorDimension: "ROWS", values: [["DIBATALKAN"]] });
+		expect(audits).toHaveLength(1);
+		const audit = Object.fromEntries(AUDIT_HEADERS.map((header, index) => [header, audits[0][index]]));
+		expect(audit).toMatchObject({ ACTION: "CANCEL", MODULE: "TRANSACTION", RECORD_ID: "TXN-ONE-CELL", USER_EMAIL: TEST_USER_EMAIL, CATATAN: "Dokumen penerimaan berganda" });
+		expect(JSON.parse(audit.BEFORE_JSON)).toMatchObject({ status: "SAH", transactionId: "TXN-ONE-CELL" });
+		expect(JSON.parse(audit.AFTER_JSON)).toMatchObject({ status: "DIBATALKAN", transactionId: "TXN-ONE-CELL" });
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+	});
+
+	it("replays a completed cancellation without duplicate audit and rejects a different reason", async () => {
+		const transactions = [transactionRow({ TRANSACTION_ID: "TXN-REPLAY" })];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits });
+		const first = await dispatch("/api/transactions/TXN-REPLAY/cancel", "POST", cancellationHeaders(), cancellationBody("Rekod penerimaan berganda"));
+		const replay = await dispatch("/api/transactions/TXN-REPLAY/cancel", "POST", cancellationHeaders(), cancellationBody("Rekod penerimaan berganda"));
+		const conflict = await dispatch("/api/transactions/TXN-REPLAY/cancel", "POST", cancellationHeaders(), cancellationBody("Sebab lain yang berbeza"));
+		expect(first.status).toBe(200);
+		expect(replay.status).toBe(200);
+		expect((await replay.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(conflict.status).toBe(409);
+		expect((await conflict.json<{ error: string }>()).error).toBe("TRANSACTION_ALREADY_CANCELLED");
+		expect(audits).toHaveLength(1);
+	});
+
+	it("recovers the deterministic audit after status update succeeds but audit append fails", async () => {
+		const transactions = [transactionRow({ TRANSACTION_ID: "TXN-RECOVERY", KUANTITI: 5 })];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ transactionRows: transactions, auditRows: audits, failAuditAppendOnce: true });
+		const first = await dispatch("/api/transactions/TXN-RECOVERY/cancel", "POST", cancellationHeaders(), cancellationBody("Pembatalan untuk pemulihan audit"));
+		expect(first.status).toBe(500);
+		expect((await first.json<{ error: string }>()).error).toBe("WRITE_FAILED");
+		expect(transactions[0][TRANSACTION_HEADERS.indexOf("STATUS")]).toBe("DIBATALKAN");
+		expect(audits).toHaveLength(0);
+		const retry = await dispatch("/api/transactions/TXN-RECOVERY/cancel", "POST", cancellationHeaders(), cancellationBody("Pembatalan untuk pemulihan audit"));
+		expect(retry.status).toBe(200);
+		expect((await retry.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("removes a cancelled MASUK effect from current stock without editing MASTER_ITEM", async () => {
+		const transactions = [transactionRow({ TRANSACTION_ID: "TXN-STOCK-CANCEL", ITEM_ID: "AT-0001", JENIS: "MASUK", KUANTITI: 5, STATUS: "SAH" })];
+		const fetchMock = mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), transactionRows: transactions });
+		const before = await dispatch("/api/items", "GET", bearerHeaders());
+		expect((await before.json<{ items: Array<{ stokSemasa: number }> }>()).items[0].stokSemasa).toBe(17);
+		const cancelled = await dispatch("/api/transactions/TXN-STOCK-CANCEL/cancel", "POST", cancellationHeaders(), cancellationBody());
+		expect(cancelled.status).toBe(200);
+		const after = await dispatch("/api/items", "GET", bearerHeaders());
+		expect((await after.json<{ items: Array<{ stokSemasa: number; jumlahMasuk: number }> }>()).items[0]).toMatchObject({ stokSemasa: 12, jumlahMasuk: 0 });
+		expect(fetchMock.mock.calls.some(([input, init]) => String(input).includes("MASTER_ITEM") && ["POST", "PUT", "DELETE"].includes(String(init?.method)))).toBe(false);
+	});
+
+	it("excludes cancelled transactions from the dashboard today summary", async () => {
+		const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+		mockAuthenticatedFetch({ transactionRows: [
+			transactionRow({ TRANSACTION_ID: "TXN-TODAY-SAH", TIMESTAMP: `${today}T09:00:00+08:00`, STATUS: "SAH" }),
+			transactionRow({ TRANSACTION_ID: "TXN-TODAY-CANCELLED", TIMESTAMP: `${today}T10:00:00+08:00`, STATUS: "DIBATALKAN" }),
+		] });
+		const response = await dispatch("/api/transactions", "GET", bearerHeaders());
+		const body = await response.json<{ summary: { todaySah: number } }>();
+		expect(response.status).toBe(200);
+		expect(body.summary.todaySah).toBe(1);
 	});
 
 	it("adds CORS headers for the production frontend on GET /health", async () => {

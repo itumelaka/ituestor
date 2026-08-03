@@ -28,6 +28,7 @@ const ALLOWED_ROLES = new Set([
 ]);
 const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]);
 const CREATE_ITEM_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
+const CANCEL_TRANSACTION_ROLES = new Set(["SUPER_ADMIN", "ADMIN_STOR"]);
 const CATEGORY_PREFIXES = new Map([
 	["ALAT TULIS", "AT"],
 	["BAHAN KIMIA", "BK"],
@@ -45,6 +46,8 @@ const NEGATIVE_TRANSACTION_TYPES = new Set([
 	"ROSAK_LUPUS",
 ]);
 const MAX_JSON_BODY_BYTES = 16 * 1024;
+const DEFAULT_TRANSACTION_LIMIT = 200;
+const MAX_TRANSACTION_LIMIT = 500;
 const IDEMPOTENCY_KEY_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -99,6 +102,26 @@ interface TransactionResult {
 	createdByName: string;
 	createdByEmail: string;
 	status: "SAH";
+}
+
+interface PublicTransaction {
+	transactionId: string;
+	timestamp: string;
+	itemId: string;
+	jenis: string;
+	kuantiti: number | null;
+	kosSeunit: number | null;
+	jumlahNilai: number | null;
+	pihakTerlibat: string;
+	bahagian: string;
+	tujuan: string;
+	catatan: string;
+	createdByEmail: string;
+	createdByName: string;
+	status: string;
+	itemName: string;
+	kategori: string;
+	unit: string;
 }
 
 interface CreateItemPayload {
@@ -338,6 +361,53 @@ async function appendSheetRecord(
 
 	if (!response.ok) {
 		throw new ApiError(500, "WRITE_FAILED", "Rekod tidak dapat disimpan.");
+	}
+}
+
+function columnName(index: number): string {
+	let value = index + 1;
+	let result = "";
+	while (value > 0) {
+		const remainder = (value - 1) % 26;
+		result = String.fromCharCode(65 + remainder) + result;
+		value = Math.floor((value - 1) / 26);
+	}
+	return result;
+}
+
+async function updateSheetCell(
+	env: Env,
+	sheetName: string,
+	googleAccessToken: string,
+	columnIndex: number,
+	rowNumber: number,
+	value: string,
+): Promise<void> {
+	if (columnIndex < 0 || rowNumber < 2) {
+		throw new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat dikemas kini.");
+	}
+	const range = encodeURIComponent(`${sheetName}!${columnName(columnIndex)}${rowNumber}`);
+	let response: Response;
+	try {
+		response = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}/values/${range}?valueInputOption=RAW`,
+			{
+				method: "PUT",
+				headers: {
+					Authorization: `Bearer ${googleAccessToken}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					majorDimension: "ROWS",
+					values: [[value]],
+				}),
+			},
+		);
+	} catch {
+		throw new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat dikemas kini.");
+	}
+	if (!response.ok) {
+		throw new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat dikemas kini.");
 	}
 }
 
@@ -930,6 +1000,318 @@ function mapInventoryItems(
 	});
 }
 
+function safeTransactionNumber(value: unknown): number | null {
+	const normalized = String(value ?? "").replace(/,/g, "").trim();
+	if (!normalized) return null;
+	const number = Number(normalized);
+	return Number.isFinite(number) ? number : null;
+}
+
+function publicTransaction(
+	record: Record<string, string>,
+	item?: Record<string, string>,
+): PublicTransaction {
+	return {
+		transactionId: record.TRANSACTION_ID ?? "",
+		timestamp: record.TIMESTAMP ?? "",
+		itemId: record.ITEM_ID ?? "",
+		jenis: record.JENIS ?? "",
+		kuantiti: safeTransactionNumber(record.KUANTITI),
+		kosSeunit: safeTransactionNumber(record.KOS_SEUNIT),
+		jumlahNilai: safeTransactionNumber(record.JUMLAH_NILAI),
+		pihakTerlibat: record.PIHAK_TERLIBAT ?? "",
+		bahagian: record.BAHAGIAN ?? "",
+		tujuan: record.TUJUAN ?? "",
+		catatan: record.CATATAN ?? "",
+		createdByEmail: normalizeEmail(record.CREATED_BY_EMAIL),
+		createdByName: record.CREATED_BY_NAME ?? "",
+		status: String(record.STATUS ?? "").trim().toUpperCase(),
+		itemName: item?.NAMA_ITEM || item?.NAMA_ITEM_ASAL || "Item tidak tersedia",
+		kategori: item?.KATEGORI || "—",
+		unit: item?.UNIT || "—",
+	};
+}
+
+function transactionDateValue(timestamp: string): number {
+	const value = Date.parse(timestamp);
+	return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+}
+
+function malaysiaDateKey(date = new Date()): string {
+	return new Intl.DateTimeFormat("en-CA", {
+		timeZone: "Asia/Kuala_Lumpur",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	}).format(date);
+}
+
+function transactionLimit(url: URL): number {
+	const input = url.searchParams.get("limit");
+	if (input === null || input === "") return DEFAULT_TRANSACTION_LIMIT;
+	if (!/^\d+$/.test(input)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Had transaksi tidak sah.");
+	}
+	return Math.min(MAX_TRANSACTION_LIMIT, Math.max(1, Number(input)));
+}
+
+async function transactionListRoute(
+	request: Request,
+	env: Env,
+	url: URL,
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	const [transactionsData, itemsData] = await Promise.all([
+		getSheetValues(env, env.TRANSACTIONS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+	]);
+	const itemRecords = rowsToRecords(itemsData);
+	const itemMap = new Map(itemRecords.map((item) => [item.ITEM_ID, item]));
+	const allTransactions = rowsToRecords(transactionsData)
+		.map((record) => publicTransaction(record, itemMap.get(record.ITEM_ID)))
+		.sort((left, right) =>
+			transactionDateValue(right.timestamp) - transactionDateValue(left.timestamp) ||
+			right.transactionId.localeCompare(left.transactionId)
+		);
+
+	const search = normalizedLookupText(url.searchParams.get("search"));
+	const status = String(url.searchParams.get("status") ?? "").trim().toUpperCase();
+	const jenis = String(url.searchParams.get("jenis") ?? "").trim().toUpperCase();
+	const itemId = String(url.searchParams.get("itemId") ?? "").trim();
+	const filtered = allTransactions.filter((transaction) => {
+		const matchesSearch = !search || [
+			transaction.transactionId,
+			transaction.itemId,
+			transaction.itemName,
+			transaction.kategori,
+			transaction.unit,
+			transaction.createdByEmail,
+			transaction.createdByName,
+			transaction.catatan,
+		].some((value) => normalizedLookupText(value).includes(search));
+		return matchesSearch &&
+			(!status || transaction.status === status) &&
+			(!jenis || transaction.jenis.toUpperCase() === jenis) &&
+			(!itemId || transaction.itemId === itemId);
+	});
+	const limit = transactionLimit(url);
+	const today = malaysiaDateKey();
+	const todaySah = allTransactions.filter((transaction) => {
+		if (transaction.status !== "SAH") return false;
+		const date = new Date(transaction.timestamp);
+		return Number.isFinite(date.getTime()) && malaysiaDateKey(date) === today;
+	}).length;
+
+	return Response.json({
+		success: true,
+		count: Math.min(filtered.length, limit),
+		total: allTransactions.length,
+		matched: filtered.length,
+		limit,
+		summary: { todaySah },
+		transactions: filtered.slice(0, limit),
+	});
+}
+
+function cancellationReason(value: unknown): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Sebab pembatalan diperlukan.");
+	}
+	const reason = requiredText(
+		(value as Record<string, unknown>).sebab,
+		"Sebab pembatalan",
+		500,
+	);
+	if (reason.length < 5) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Sebab pembatalan mesti sekurang-kurangnya 5 aksara.");
+	}
+	return reason;
+}
+
+function normalizedTransactionId(value: string): string {
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(value);
+	} catch {
+		throw new ApiError(400, "VALIDATION_ERROR", "ID transaksi tidak sah.");
+	}
+	const transactionId = normalizeSpaces(decoded);
+	if (!transactionId || transactionId.length > 100 || /[\u0000-\u001F\u007F/\\]/.test(transactionId)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "ID transaksi tidak sah.");
+	}
+	return transactionId;
+}
+
+function cancellationSummary(
+	record: Record<string, string>,
+	status: "SAH" | "DIBATALKAN",
+) {
+	return {
+		transactionId: record.TRANSACTION_ID,
+		itemId: record.ITEM_ID,
+		jenis: record.JENIS,
+		kuantiti: safeTransactionNumber(record.KUANTITI),
+		kosSeunit: safeTransactionNumber(record.KOS_SEUNIT),
+		jumlahNilai: safeTransactionNumber(record.JUMLAH_NILAI),
+		status,
+	};
+}
+
+function cancellationResponse(
+	record: Record<string, string>,
+	audit: Record<string, string>,
+	replayed: boolean,
+): Response {
+	const summary = cancellationSummary(record, "DIBATALKAN");
+	return Response.json({
+		success: true,
+		replayed,
+		transaction: {
+			...summary,
+			cancelledByEmail: normalizeEmail(audit.USER_EMAIL),
+			cancelledByName: audit.USER_NAME || normalizeEmail(audit.USER_EMAIL),
+			sebab: audit.CATATAN || "",
+		},
+	});
+}
+
+function cancellationAudit(
+	auditId: string,
+	record: Record<string, string>,
+	user: AuthorizedUser,
+	reason: string,
+): Record<string, string | number> {
+	return {
+		AUDIT_ID: auditId,
+		TIMESTAMP: malaysiaTimestamp(),
+		USER_EMAIL: user.email,
+		USER_NAME: user.nama || user.email,
+		ACTION: "CANCEL",
+		MODULE: "TRANSACTION",
+		RECORD_ID: record.TRANSACTION_ID,
+		BEFORE_JSON: JSON.stringify(cancellationSummary(record, "SAH")),
+		AFTER_JSON: JSON.stringify(cancellationSummary(record, "DIBATALKAN")),
+		DEVICE_ID: "",
+		IP_HASH: "",
+		CATATAN: reason,
+	};
+}
+
+function sameTransactionExceptStatus(
+	before: Record<string, string>,
+	after: Record<string, string>,
+	headers: string[],
+): boolean {
+	return headers.every((header) =>
+		header === "STATUS" || String(before[header] ?? "") === String(after[header] ?? "")
+	);
+}
+
+async function cancelTransactionRoute(
+	request: Request,
+	env: Env,
+	transactionIdInput: string,
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!CANCEL_TRANSACTION_ROLES.has(authorization.user.role)) {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Peranan pengguna tidak dibenarkan membatalkan transaksi.");
+	}
+	const transactionId = normalizedTransactionId(transactionIdInput);
+	const reason = cancellationReason(await readJsonBody(request));
+	const [transactionsData, auditData] = await Promise.all([
+		getSheetValues(env, env.TRANSACTIONS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const headers = sheetHeaders(transactionsData);
+	const records = rowsToRecords(transactionsData);
+	const recordIndex = records.findIndex((record) => record.TRANSACTION_ID === transactionId);
+	if (recordIndex < 0) {
+		throw new ApiError(404, "TRANSACTION_NOT_FOUND", "Transaksi tidak ditemui.");
+	}
+	const record = records[recordIndex];
+	const status = String(record.STATUS ?? "").trim().toUpperCase();
+	const auditId = await stableId("AUD", `CANCEL:${transactionId}`);
+	const existingAudit = rowsToRecords(auditData).find((audit) =>
+		audit.AUDIT_ID === auditId && audit.ACTION === "CANCEL" &&
+		audit.MODULE === "TRANSACTION" && audit.RECORD_ID === transactionId
+	);
+
+	if (status === "DIBATALKAN") {
+		if (existingAudit) {
+			if (existingAudit.CATATAN !== reason) {
+				throw new ApiError(409, "TRANSACTION_ALREADY_CANCELLED", "Transaksi telah dibatalkan.");
+			}
+			return cancellationResponse(record, existingAudit, true);
+		}
+		const recoveryAudit = cancellationAudit(auditId, record, authorization.user, reason);
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(auditData),
+			recoveryAudit,
+		);
+		return cancellationResponse(
+			record,
+			Object.fromEntries(Object.entries(recoveryAudit).map(([key, value]) => [key, String(value)])),
+			true,
+		);
+	}
+	if (status !== "SAH") {
+		throw new ApiError(409, "TRANSACTION_NOT_CANCELLABLE", "Status transaksi tidak boleh dibatalkan.");
+	}
+	if (existingAudit) {
+		throw new ApiError(409, "CANCELLATION_CONFLICT", "Rekod pembatalan bercanggah dengan status transaksi.");
+	}
+
+	const statusColumn = headers.indexOf("STATUS");
+	await updateSheetCell(
+		env,
+		env.TRANSACTIONS_SHEET,
+		authorization.googleAccessToken,
+		statusColumn,
+		recordIndex + 2,
+		"DIBATALKAN",
+	);
+
+	const [verifiedTransactionsData, latestAuditData] = await Promise.all([
+		getSheetValues(env, env.TRANSACTIONS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const verifiedRecord = rowsToRecords(verifiedTransactionsData).find(
+		(candidate) => candidate.TRANSACTION_ID === transactionId,
+	);
+	if (
+		!verifiedRecord ||
+		String(verifiedRecord.STATUS ?? "").trim().toUpperCase() !== "DIBATALKAN" ||
+		!sameTransactionExceptStatus(record, verifiedRecord, headers)
+	) {
+		throw new ApiError(409, "CANCELLATION_CONFLICT", "Transaksi berubah semasa pembatalan diproses.");
+	}
+
+	let finalAudit = rowsToRecords(latestAuditData).find((audit) =>
+		audit.AUDIT_ID === auditId && audit.ACTION === "CANCEL" &&
+		audit.MODULE === "TRANSACTION" && audit.RECORD_ID === transactionId
+	);
+	if (finalAudit && finalAudit.CATATAN !== reason) {
+		throw new ApiError(409, "CANCELLATION_CONFLICT", "Transaksi telah dibatalkan oleh permintaan lain.");
+	}
+	if (!finalAudit) {
+		const auditRecord = cancellationAudit(auditId, record, authorization.user, reason);
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(latestAuditData),
+			auditRecord,
+		);
+		finalAudit = Object.fromEntries(
+			Object.entries(auditRecord).map(([key, value]) => [key, String(value)]),
+		);
+	}
+	return cancellationResponse(verifiedRecord, finalAudit, false);
+}
+
 async function protectedRoute(
 	request: Request,
 	env: Env,
@@ -1286,6 +1668,28 @@ export default {
 			}
 		}
 
+		if (request.method === "GET" && url.pathname === "/api/transactions") {
+			try {
+				return addCorsHeaders(
+					await transactionListRoute(request, env, url),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(500, "INTERNAL_ERROR", "Transaksi tidak dapat dimuatkan.");
+				if (apiError.status >= 500) {
+					console.error(JSON.stringify({
+						message: "transaction list route failed",
+						code: apiError.code,
+						path: url.pathname,
+						status: apiError.status,
+					}));
+				}
+				return addCorsHeaders(errorResponse(apiError), origin);
+			}
+		}
+
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/items"
@@ -1345,6 +1749,33 @@ export default {
 				if (safeError.status >= 500) {
 					console.error(JSON.stringify({
 						message: "incoming transaction route failed",
+						code: safeError.code,
+						path: url.pathname,
+						status: safeError.status,
+					}));
+				}
+				return addCorsHeaders(errorResponse(safeError), origin);
+			}
+		}
+
+		const cancellationMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/cancel$/);
+		if (request.method === "POST" && cancellationMatch) {
+			try {
+				return addCorsHeaders(
+					await cancelTransactionRoute(request, env, cancellationMatch[1]),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat dibatalkan.");
+				const safeError = apiError.status >= 500 &&
+						!["AUTH_CONFIG_ERROR", "AUTH_SERVICE_ERROR"].includes(apiError.code)
+					? new ApiError(500, "WRITE_FAILED", "Transaksi tidak dapat dibatalkan.")
+					: apiError;
+				if (safeError.status >= 500) {
+					console.error(JSON.stringify({
+						message: "cancel transaction route failed",
 						code: safeError.code,
 						path: url.pathname,
 						status: safeError.status,
