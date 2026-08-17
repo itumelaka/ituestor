@@ -604,12 +604,17 @@ function activeIncomingItems() {
   return loadedItems.filter((item) => String(item.status ?? "").trim().toUpperCase() === "AKTIF");
 }
 
+function matchingIncomingItems() {
+  const query = elements.incomingItemSearch.value.trim().toLocaleLowerCase("ms");
+  return activeIncomingItems().filter((item) => !query ||
+    [item.itemId, item.namaItem, item.namaItemAsal, item.kategori, item.unit].some((value) =>
+      String(value ?? "").toLocaleLowerCase("ms").includes(query)));
+}
+
 function populateIncomingItems() {
   const selected = elements.incomingItem.value;
   const query = elements.incomingItemSearch.value.trim().toLocaleLowerCase("ms");
-  const matches = activeIncomingItems().filter((item) => !query ||
-    [item.itemId, item.namaItem, item.namaItemAsal].some((value) =>
-      String(value ?? "").toLocaleLowerCase("ms").includes(query)));
+  const matches = matchingIncomingItems();
   elements.incomingItem.innerHTML = '<option value="">Pilih item</option>' +
     matches.map((item) => `<option value="${escapeHtml(item.itemId)}">${escapeHtml(item.itemId)} — ${escapeHtml(item.namaItem || item.namaItemAsal || "Tanpa nama")}</option>`).join("");
   if (matches.some((item) => String(item.itemId) === selected)) {
@@ -628,8 +633,11 @@ function updateIncomingItemSummary() {
   const item = selectedIncomingItem();
   if (!item) {
     const query = elements.incomingItemSearch.value.trim();
+    const matches = matchingIncomingItems();
     elements.incomingItemSummary.textContent = query
-      ? `Item tidak ditemui: ${query}`
+      ? matches.length
+        ? `${matches.length} item ditemui. Pilih item daripada senarai.`
+        : `Item tidak ditemui: ${query}`
       : activeIncomingItems().length
         ? "Pilih item aktif daripada inventori."
         : "Tiada item aktif tersedia.";
