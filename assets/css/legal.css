@@ -1,0 +1,53 @@
+:root {
+  --blue: #14569c;
+  --blue-dark: #0e447f;
+  --yellow: #ffc71f;
+  --cream: #f4eee5;
+  --paper: #fbf8f3;
+  --ink: #242321;
+  --muted: #625f5b;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 10%, rgba(255, 199, 31, .26), transparent 28%),
+    radial-gradient(circle at 85% 90%, rgba(49, 132, 202, .2), transparent 30%),
+    var(--cream);
+  font: 16px/1.65 "Segoe UI", Arial, sans-serif;
+}
+a { color: var(--blue-dark); text-underline-offset: 3px; }
+a:focus-visible { outline: 3px solid rgba(255, 199, 31, .7); outline-offset: 3px; }
+.legal-shell { width: min(860px, calc(100% - 32px)); margin: 32px auto; }
+.legal-header, .legal-content {
+  border: 1px solid rgba(255,255,255,.78);
+  border-radius: 24px;
+  background: rgba(251,248,243,.96);
+  box-shadow: 0 16px 38px rgba(35,48,61,.14);
+}
+.legal-header { display: flex; align-items: center; gap: 18px; padding: 22px 26px; }
+.legal-logo { width: 74px; height: 74px; object-fit: contain; border-radius: 18px; }
+.legal-header p, .legal-header h1 { margin: 0; }
+.legal-header p { color: var(--blue); font-size: .76rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.legal-header h1 { color: var(--blue-dark); font-size: clamp(1.75rem, 5vw, 2.55rem); line-height: 1.1; }
+.legal-content { margin-top: 18px; padding: clamp(24px, 5vw, 48px); }
+.legal-content h2 { margin: 2rem 0 .55rem; color: var(--blue-dark); font-size: 1.2rem; line-height: 1.3; }
+.legal-content h2:first-of-type { margin-top: 1.2rem; }
+.legal-content p, .legal-content li { color: #393735; }
+.legal-content ul { padding-left: 1.35rem; }
+.legal-meta { padding-bottom: 1rem; border-bottom: 1px solid #ded8d0; color: var(--muted); }
+.legal-note { padding: 16px 18px; border-left: 5px solid var(--yellow); border-radius: 12px; background: #fff7d7; }
+.legal-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 20px 4px 6px; color: var(--muted); font-size: .9rem; }
+.legal-footer nav { display: flex; gap: 16px; }
+
+@media (max-width: 560px) {
+  .legal-shell { width: min(100% - 20px, 860px); margin: 10px auto; }
+  .legal-header { align-items: flex-start; padding: 18px; }
+  .legal-logo { width: 58px; height: 58px; }
+  .legal-content { margin-top: 10px; border-radius: 20px; }
+  .legal-footer { flex-direction: column; padding-inline: 8px; }
+}

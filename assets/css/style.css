@@ -71,6 +71,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .auth-card h1 { margin: 5px 0 9px; color: var(--blue-dark); font-size: 31px; }
 .auth-intro { margin: 0 auto 20px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .auth-card > small { display: block; margin-top: 17px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.auth-legal { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; font-size: 11px; }
+.auth-legal a { color: var(--blue-dark); font-weight: 700; text-underline-offset: 3px; }
+.auth-legal span { color: #a7a19a; }
 .auth-state {
   display: flex; min-height: 40px; align-items: center; justify-content: center; gap: 9px;
   margin-bottom: 12px; padding: 9px 12px; color: #174b7e; background: #e3edf7;

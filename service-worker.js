@@ -1,9 +1,12 @@
-const CACHE_NAME = "ituestor-shell-v4";
+const CACHE_NAME = "ituestor-shell-v5";
 const SHELL_ASSETS = [
   "./",
   "./index.html",
+  "./privacy.html",
+  "./terms.html",
   "./manifest.webmanifest",
   "./assets/css/style.css",
+  "./assets/css/legal.css",
   "./assets/js/app.js",
   "./assets/images/itu_estor_inventory_icon.png",
   "./assets/images/ituestor-header.png",
@@ -49,7 +52,8 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
-        .catch(() => caches.match("./index.html"))
+        .catch(() => caches.match(request)
+          .then((cached) => cached || caches.match("./index.html")))
     );
     return;
   }
