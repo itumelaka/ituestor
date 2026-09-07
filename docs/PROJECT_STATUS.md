@@ -1,6 +1,8 @@
 # Status Projek ITU eSTOR
 
-**Tarikh status disahkan:** 3 Ogos 2026
+**Tarikh status disahkan:** 7 September 2026
+
+> Checkpoint produksi 7 September 2026: Barang Keluar, pengurusan metadata/status item, serta aliran permohonan dan kelulusan akses pengguna telah dilaksanakan. Suite mengandungi 126 ujian lulus. Cloudflare Worker production versi `a104cb10-6599-4d89-9a64-4fd5b9cba394` telah dideploy dengan relay Google Apps Script bagi notifikasi kelulusan melalui `itumelaka@gmail.com`.
 
 ## Ringkasan
 
@@ -119,7 +121,9 @@ Selepas pembatalan, stok Bateri D kembali kepada 0, nilai kembali kepada RM0.00,
 - [ ] Permohonan, kelulusan dan penyerahan.
 - [ ] Sunting metadata item.
 - [ ] Nyahaktif/aktif semula item.
-- [ ] UI pengurusan pengguna dan peranan.
+- [x] Permohonan akses automatik dan UI kelulusan pengguna.
+- [x] Sediakan kod relay Google Apps Script dan sambungan Worker bertandatangan.
+- [x] Deploy relay menggunakan `itumelaka@gmail.com`, tetapkan Script Property dan dua Worker secrets.
 - [ ] UI paparan audit.
 - [ ] Tetapan.
 - [ ] Laporan.

@@ -10,7 +10,7 @@
 4465e0f1-4687-4e48-82a2-2e710e5b6dfc
 ```
 
-Semua endpoint `/api/*` memerlukan token Supabase dan pengguna `USERS` yang aktif. `GET /health` sahaja bersifat awam.
+Semua endpoint `/api/*` memerlukan token Supabase. `GET /api/me` mencipta permohonan `MENUNGGU` bagi identiti Google baharu; endpoint data lain tetap memerlukan pengguna `USERS` yang aktif. `GET /health` sahaja bersifat awam.
 
 ## Pengesahan
 
@@ -25,6 +25,9 @@ Worker mengesahkan token melalui Supabase `/auth/v1/user`, menormalkan e-mel, ke
 | Endpoint | SUPER_ADMIN | ADMIN_STOR | PEMBANTU_STOR | VIEWER |
 |---|:---:|:---:|:---:|:---:|
 | `GET /api/me` | Ya | Ya | Ya | Ya |
+| `GET /api/users` | Ya | Tidak | Tidak | Tidak |
+| `POST /api/users/:userId/approve` | Ya | Tidak | Tidak | Tidak |
+| `POST /api/users/:userId/reject` | Ya | Tidak | Tidak | Tidak |
 | `GET /api/items` | Ya | Ya | Ya | Ya |
 | `POST /api/items` | Ya | Ya | Tidak | Tidak |
 | `POST /api/transactions/in` | Ya | Ya | Ya | Tidak |
@@ -60,6 +63,16 @@ Mengembalikan identiti dan peranan aplikasi yang telah disahkan.
   }
 }
 ```
+
+Bagi akaun Google baharu, endpoint menambah rekod `USERS` berstatus `MENUNGGU`, merekod audit `REQUEST_ACCESS`, dan mengembalikan HTTP `202` dengan `access: "pending"`. Pengguna belum boleh membaca inventori.
+
+## Pengurusan permohonan akses
+
+- `GET /api/users` menyenaraikan pengguna kepada `SUPER_ADMIN`, dengan permohonan `MENUNGGU` didahulukan.
+- `POST /api/users/:userId/approve` menerima `{ "role": "VIEWER" }`, menetapkan `STATUS = AKTIF`, merekod audit `APPROVE_ACCESS`, dan cuba menghantar e-mel kelulusan.
+- `POST /api/users/:userId/reject` menetapkan `STATUS = DITOLAK` dan merekod audit `REJECT_ACCESS`.
+- Penghantaran e-mel menggunakan relay Google Apps Script yang berjalan sebagai `itumelaka@gmail.com`. Worker menandatangani setiap permintaan menggunakan HMAC SHA-256 melalui rahsia `EMAIL_WEBHOOK_SECRET`; URL `/exec` disimpan sebagai `EMAIL_WEBHOOK_URL`. Kedua-dua nilai mesti dikonfigurasi sebagai Worker secrets dan rahsia yang sama mesti berada dalam Apps Script Property `ESTOR_EMAIL_WEBHOOK_SECRET`.
+- Permintaan e-mel hanya sah selama lima minit dan menggunakan nonce untuk mengurangkan risiko ulangan. Kejayaan direkod sebagai audit `SEND_ACCESS_APPROVED_EMAIL`; tindakan lulus yang dimainkan semula tidak menghantar e-mel kedua jika audit tersebut sudah wujud.
 
 ## `GET /api/items`
 
@@ -260,15 +273,19 @@ Retry dengan sebab yang sama boleh mengembalikan `replayed: true`. Jika status t
 | `401` | `AUTH_REQUIRED` | Header bearer tiada |
 | `401` | `INVALID_TOKEN` | Token tidak sah atau tamat |
 | `403` | `USER_NOT_REGISTERED` | E-mel tiada dalam `USERS` |
+| `403` | `USER_PENDING` | Permohonan masih menunggu kelulusan |
+| `403` | `USER_REJECTED` | Permohonan akses telah ditolak |
 | `403` | `USER_INACTIVE` | Pengguna bukan `AKTIF` |
 | `403` | `ROLE_NOT_ALLOWED` | Peranan tidak dibenarkan untuk operasi |
 | `404` | `ITEM_NOT_FOUND` | Item tidak ditemui |
 | `404` | `TRANSACTION_NOT_FOUND` | Transaksi tidak ditemui |
+| `404` | `USER_NOT_FOUND` | Rekod pengguna tidak ditemui |
 | `409` | `ITEM_ALREADY_EXISTS` | Item ternormalisasi telah wujud |
 | `409` | `IDEMPOTENCY_CONFLICT` | Kunci digunakan bagi payload berbeza |
 | `409` | `TRANSACTION_ALREADY_CANCELLED` | Transaksi telah dibatalkan |
 | `409` | `TRANSACTION_NOT_CANCELLABLE` | Status bukan `SAH` |
 | `409` | `CANCELLATION_CONFLICT` | Perubahan serentak dikesan |
+| `409` | `USER_STATUS_CONFLICT` | Status pengguna telah berubah |
 | `500` | `WRITE_FAILED` | Penulisan atau audit tidak dapat disahkan |
 
 Respons tidak mendedahkan token, respons mentah pembekal atau stack trace.

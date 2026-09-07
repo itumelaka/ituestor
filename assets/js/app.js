@@ -36,6 +36,9 @@ let authRetryMode = "auth";
 let incomingAttemptKey = "";
 let incomingAttemptFingerprint = "";
 let incomingSubmitting = false;
+let outgoingAttemptKey = "";
+let outgoingAttemptFingerprint = "";
+let outgoingSubmitting = false;
 let createItemAttemptKey = "";
 let createItemAttemptFingerprint = "";
 let createItemSubmitting = false;
@@ -48,6 +51,10 @@ let lastFocusedTransaction = null;
 let cancellationSubmitting = false;
 let itemEditSubmitting = false;
 let itemLifecycleSubmitting = false;
+let loadedUsers = [];
+let usersRequest = null;
+let usersLoaded = false;
+let userDecisionSubmitting = false;
 
 const elements = {
   dataState: document.getElementById("dataState"),
@@ -64,7 +71,9 @@ const elements = {
   dashboardView: document.getElementById("dashboard"),
   registerView: document.getElementById("daftar-item"),
   incomingView: document.getElementById("barang-masuk"),
+  outgoingView: document.getElementById("barang-keluar"),
   transactionView: document.getElementById("transaksi"),
+  userManagementView: document.getElementById("pengguna"),
   registerDataState: document.getElementById("registerDataState"),
   registerStateMessage: document.getElementById("registerStateMessage"),
   registerRetry: document.getElementById("registerRetry"),
@@ -132,13 +141,22 @@ const elements = {
   authStateMessage: document.getElementById("authStateMessage"),
   googleLogin: document.getElementById("googleLogin"),
   authRetry: document.getElementById("authRetry"),
+  authLogout: document.getElementById("authLogout"),
   userProfile: document.getElementById("userProfile"),
   userAvatarFallback: document.getElementById("userAvatarFallback"),
   userAvatarImage: document.getElementById("userAvatarImage"),
   userName: document.getElementById("userName"),
   userEmail: document.getElementById("userEmail"),
   logoutButton: document.getElementById("logoutButton"),
+  userManagementNav: document.getElementById("userManagementNav"),
+  userManagementState: document.getElementById("userManagementState"),
+  userManagementStateMessage: document.getElementById("userManagementStateMessage"),
+  retryUsers: document.getElementById("retryUsers"),
+  userManagementSummary: document.getElementById("userManagementSummary"),
+  userManagementRows: document.getElementById("userManagementRows"),
+  userManagementCards: document.getElementById("userManagementCards"),
   quickBarangMasuk: document.getElementById("quickBarangMasuk"),
+  quickBarangKeluar: document.getElementById("quickBarangKeluar"),
   incomingState: document.getElementById("incomingState"),
   incomingStateMessage: document.getElementById("incomingStateMessage"),
   retryIncoming: document.getElementById("retryIncoming"),
@@ -152,6 +170,20 @@ const elements = {
   incomingNotes: document.getElementById("incomingNotes"),
   incomingTotal: document.getElementById("incomingTotal"),
   incomingSubmit: document.getElementById("incomingSubmit"),
+  outgoingState: document.getElementById("outgoingState"),
+  outgoingStateMessage: document.getElementById("outgoingStateMessage"),
+  retryOutgoing: document.getElementById("retryOutgoing"),
+  outgoingForm: document.getElementById("outgoingForm"),
+  outgoingItemSearch: document.getElementById("outgoingItemSearch"),
+  outgoingItem: document.getElementById("outgoingItem"),
+  outgoingItemSummary: document.getElementById("outgoingItemSummary"),
+  outgoingQuantity: document.getElementById("outgoingQuantity"),
+  outgoingRecipient: document.getElementById("outgoingRecipient"),
+  outgoingDepartment: document.getElementById("outgoingDepartment"),
+  outgoingPurpose: document.getElementById("outgoingPurpose"),
+  outgoingNotes: document.getElementById("outgoingNotes"),
+  outgoingBalance: document.getElementById("outgoingBalance"),
+  outgoingSubmit: document.getElementById("outgoingSubmit"),
   todayTransactionCount: document.getElementById("todayTransactionCount"),
   recentTransactionRows: document.getElementById("recentTransactionRows"),
   transactionState: document.getElementById("transactionState"),
@@ -225,6 +257,12 @@ function setIncomingState(state, message, retry = false) {
   elements.retryIncoming.hidden = !retry;
 }
 
+function setOutgoingState(state, message, retry = false) {
+  elements.outgoingState.className = `data-state is-${state}`;
+  elements.outgoingStateMessage.textContent = message;
+  elements.retryOutgoing.hidden = !retry;
+}
+
 function setCreateItemState(state, message, retry = false) {
   elements.createItemState.className = `data-state is-${state}`;
   elements.createItemStateMessage.textContent = message;
@@ -242,6 +280,12 @@ function setCancellationState(state, message) {
   elements.cancelTransactionStateMessage.textContent = message;
 }
 
+function setUserManagementState(state, message, retry = false) {
+  elements.userManagementState.className = `data-state is-${state}`;
+  elements.userManagementStateMessage.textContent = message;
+  elements.retryUsers.hidden = !retry;
+}
+
 function canCreateItem() {
   return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
 }
@@ -256,6 +300,10 @@ function canManageItems() {
 
 function canCancelTransactions() {
   return ["SUPER_ADMIN", "ADMIN_STOR"].includes(currentApplicationUser?.role);
+}
+
+function canManageUsers() {
+  return currentApplicationUser?.role === "SUPER_ADMIN";
 }
 
 function itemNumbers(item) {
@@ -463,6 +511,9 @@ function closeTransactionDetails() {
   if (elements.transactionModal.hidden) return;
   elements.transactionModal.hidden = true;
   openedTransactionId = "";
+  loadedUsers = [];
+  usersRequest = null;
+  usersLoaded = false;
   document.body.style.overflow = "";
   if (lastFocusedTransaction) lastFocusedTransaction.focus();
 }
@@ -781,6 +832,189 @@ async function submitIncomingTransaction(event) {
   }
 }
 
+function availableOutgoingItems() {
+  return loadedItems.filter((item) => {
+    const view = itemView(item);
+    return String(item.status ?? "").trim().toUpperCase() === "AKTIF" &&
+      view.stock.valid && view.stock.value > 0;
+  });
+}
+
+function matchingOutgoingItems() {
+  const query = elements.outgoingItemSearch.value.trim().toLocaleLowerCase("ms");
+  return availableOutgoingItems().filter((item) => !query ||
+    [item.itemId, item.namaItem, item.namaItemAsal, item.kategori, item.unit].some((value) =>
+      String(value ?? "").toLocaleLowerCase("ms").includes(query)));
+}
+
+function populateOutgoingItems() {
+  const selected = elements.outgoingItem.value;
+  const matches = matchingOutgoingItems();
+  elements.outgoingItem.innerHTML = '<option value="">Pilih item</option>' +
+    matches.map((item) => `<option value="${escapeHtml(item.itemId)}">${escapeHtml(item.itemId)} — ${escapeHtml(item.namaItem || item.namaItemAsal || "Tanpa nama")}</option>`).join("");
+  if (matches.some((item) => String(item.itemId) === selected)) elements.outgoingItem.value = selected;
+  updateOutgoingItemSummary();
+}
+
+function selectedOutgoingItem() {
+  return loadedItems.find((item) => String(item.itemId) === elements.outgoingItem.value);
+}
+
+function updateOutgoingItemSummary() {
+  const item = selectedOutgoingItem();
+  if (!item) {
+    elements.outgoingQuantity.removeAttribute("max");
+    const query = elements.outgoingItemSearch.value.trim();
+    const matches = matchingOutgoingItems();
+    elements.outgoingItemSummary.textContent = query
+      ? matches.length
+        ? `${matches.length} item berstok ditemui. Pilih item daripada senarai.`
+        : `Tiada item aktif berstok ditemui: ${query}`
+      : availableOutgoingItems().length
+        ? "Pilih item aktif yang mempunyai stok."
+        : "Tiada item aktif yang mempunyai stok untuk dikeluarkan.";
+    updateOutgoingBalance();
+    return;
+  }
+  const view = itemView(item);
+  elements.outgoingItemSummary.textContent =
+    `${item.itemId} · ${item.namaItem || item.namaItemAsal || "Tanpa nama"} · ${item.kategori || "Tiada kategori"} · ${item.unit || "Tiada unit"} · Stok semasa ${formatNumber(view.stock)} · Kos ${formatCurrency(view.cost)}`;
+  elements.outgoingQuantity.max = view.stock.valid ? String(view.stock.value) : "";
+  updateOutgoingBalance();
+}
+
+function outgoingPayload() {
+  return {
+    itemId: elements.outgoingItem.value,
+    kuantiti: Number(elements.outgoingQuantity.value),
+    pihakTerlibat: elements.outgoingRecipient.value.trim(),
+    bahagian: elements.outgoingDepartment.value.trim(),
+    tujuan: elements.outgoingPurpose.value.trim(),
+    catatan: elements.outgoingNotes.value.trim()
+  };
+}
+
+function updateOutgoingBalance() {
+  const item = selectedOutgoingItem();
+  const view = item ? itemView(item) : null;
+  const quantity = Number(elements.outgoingQuantity.value);
+  const valid = view?.stock.valid && Number.isFinite(quantity) && quantity > 0;
+  elements.outgoingBalance.textContent = valid
+    ? `${(view.stock.value - quantity).toLocaleString("ms-MY", { maximumFractionDigits: 2 })} ${item.unit || "unit"}`
+    : "—";
+  elements.outgoingBalance.classList.toggle("is-negative", Boolean(valid && quantity > view.stock.value));
+}
+
+function markOutgoingMaterialChange() {
+  const fingerprint = JSON.stringify(outgoingPayload());
+  if (outgoingAttemptFingerprint && fingerprint !== outgoingAttemptFingerprint) {
+    outgoingAttemptKey = "";
+    outgoingAttemptFingerprint = "";
+  }
+  updateOutgoingBalance();
+  if (!outgoingSubmitting) setOutgoingState("ready", "");
+}
+
+function outgoingErrorMessage(status, code, data) {
+  if (status === 401) return "Sesi anda telah tamat. Log keluar dan masuk semula.";
+  const messages = {
+    VALIDATION_ERROR: "Semak item, kuantiti, penerima, bahagian dan tujuan sebelum menghantar.",
+    INVALID_JSON: "Maklumat transaksi tidak dapat dibaca.",
+    INVALID_IDEMPOTENCY_KEY: "Cubaan ini tidak mempunyai pengecam selamat. Muat semula halaman dan cuba lagi.",
+    IDEMPOTENCY_CONFLICT: "Cubaan yang sama telah digunakan untuk maklumat berbeza. Ubah borang dan cuba lagi.",
+    ITEM_NOT_FOUND: "Item yang dipilih tidak lagi ditemui.",
+    ITEM_INACTIVE: "Item yang dipilih tidak lagi aktif.",
+    ROLE_NOT_ALLOWED: "Peranan anda tidak dibenarkan merekod Barang Keluar.",
+    WRITE_FAILED: "Transaksi belum dapat disahkan tersimpan. Cuba hantar semula tanpa mengubah borang."
+  };
+  if (code === "INSUFFICIENT_STOCK") {
+    const stock = Number(data?.stokSemasa);
+    return Number.isFinite(stock)
+      ? `Stok tidak mencukupi. Baki semasa yang disahkan ialah ${stock.toLocaleString("ms-MY", { maximumFractionDigits: 2 })}.`
+      : "Stok tidak mencukupi untuk kuantiti yang diminta.";
+  }
+  return messages[code] || "Transaksi tidak dapat disimpan buat masa ini.";
+}
+
+async function submitOutgoingTransaction(event) {
+  if (event) event.preventDefault();
+  if (outgoingSubmitting || !accessGranted) return;
+  if (!canAddStock()) {
+    setOutgoingState("error", "Peranan anda tidak dibenarkan merekod Barang Keluar.");
+    return;
+  }
+  if (!elements.outgoingForm.reportValidity()) return;
+
+  let session;
+  try {
+    const result = await supabaseClient.auth.getSession();
+    if (result.error || !result.data.session?.access_token) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    session = result.data.session;
+  } catch {
+    setOutgoingState("error", "Sesi tidak dapat disemak. Cuba lagi.", true);
+    return;
+  }
+
+  const payload = outgoingPayload();
+  const fingerprint = JSON.stringify(payload);
+  if (!outgoingAttemptKey || outgoingAttemptFingerprint !== fingerprint) {
+    outgoingAttemptKey = crypto.randomUUID();
+    outgoingAttemptFingerprint = fingerprint;
+  }
+
+  outgoingSubmitting = true;
+  elements.outgoingSubmit.disabled = true;
+  elements.outgoingSubmit.textContent = "Sedang menyimpan…";
+  setOutgoingState("loading", "Menyemak baki, merekod transaksi dan audit…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/transactions/out`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+        "Idempotency-Key": outgoingAttemptKey
+      },
+      body: JSON.stringify(payload)
+    });
+    let data = {};
+    try { data = await response.json(); } catch { /* Gunakan mesej selamat lalai. */ }
+    if (response.status === 401) {
+      showAccessGate(outgoingErrorMessage(response.status, data.error, data), "logout");
+      return;
+    }
+    if (!response.ok || data.success !== true) {
+      const uncertain = response.status >= 500 || data.error === "WRITE_FAILED";
+      setOutgoingState("error", outgoingErrorMessage(response.status, data.error, data), uncertain);
+      return;
+    }
+
+    const transaction = data.transaction || {};
+    setOutgoingState(
+      "success",
+      `${data.replayed ? "Transaksi disahkan semula" : "Barang Keluar berjaya direkodkan"}: ${transaction.transactionId || "rekod baharu"}.`
+    );
+    outgoingAttemptKey = "";
+    outgoingAttemptFingerprint = "";
+    elements.outgoingQuantity.value = "";
+    elements.outgoingRecipient.value = "";
+    elements.outgoingDepartment.value = "";
+    elements.outgoingPurpose.value = "";
+    elements.outgoingNotes.value = "";
+    await Promise.all([refreshInventoryData(), refreshTransactionsData()]);
+    updateOutgoingBalance();
+  } catch {
+    setOutgoingState("error", "Sambungan terputus dan status simpanan belum pasti. Cuba hantar semula tanpa mengubah borang.", true);
+  } finally {
+    outgoingSubmitting = false;
+    elements.outgoingSubmit.disabled = !canAddStock();
+    elements.outgoingSubmit.textContent = "Simpan Barang Keluar";
+  }
+}
+
 function openCreateItemPanel(prefillName = "") {
   if (!canCreateItem()) return;
   elements.createItemPanel.hidden = false;
@@ -862,6 +1096,7 @@ function mergeConfirmedItem(item) {
   renderDashboard(loadedItems, loadedItems.length);
   populateRegisterFilters();
   populateIncomingItems();
+  populateOutgoingItems();
 }
 
 async function submitCreateItem(event) {
@@ -1091,19 +1326,142 @@ function renderRegister() {
   elements.nextPage.disabled = registerPage >= totalPages || !matches.length;
 }
 
+function userStatusClass(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "AKTIF") return "api-active";
+  if (normalized === "MENUNGGU") return "stock-low";
+  return "api-inactive";
+}
+
+function userDecisionControls(user, card = false) {
+  if (user.status !== "MENUNGGU") return `<span class="user-decision-complete">${user.status === "AKTIF" ? "Diluluskan" : "Tiada tindakan"}</span>`;
+  const roles = ["VIEWER", "PEMBANTU_STOR", "ADMIN_STOR", "SUPER_ADMIN"];
+  return `<div class="user-decision-controls">
+    <label><span class="sr-only">Peranan untuk ${escapeHtml(user.nama || user.email)}</span>
+      <select data-user-role>${roles.map((role) => `<option value="${role}"${role === "VIEWER" ? " selected" : ""}>${role}</option>`).join("")}</select>
+    </label>
+    <button type="button" class="approve-user" data-user-action="approve" data-user-id="${escapeHtml(user.userId)}">Lulus</button>
+    <button type="button" class="reject-user" data-user-action="reject" data-user-id="${escapeHtml(user.userId)}">Tolak</button>
+  </div>`;
+}
+
+function renderUsers() {
+  if (!canManageUsers()) return;
+  const pending = loadedUsers.filter((user) => user.status === "MENUNGGU").length;
+  elements.userManagementSummary.textContent = `${loadedUsers.length.toLocaleString("ms-MY")} pengguna · ${pending.toLocaleString("ms-MY")} menunggu kelulusan`;
+  if (!loadedUsers.length) {
+    elements.userManagementRows.innerHTML = '<tr><td colspan="5" class="empty-state">Belum ada pengguna.</td></tr>';
+    elements.userManagementCards.innerHTML = '<p class="empty-state">Belum ada pengguna.</p>';
+    return;
+  }
+  elements.userManagementRows.innerHTML = loadedUsers.map((user) => `<tr class="user-record">
+    <td><strong>${escapeHtml(user.nama || "—")}</strong><small>${escapeHtml(user.userId)}</small></td>
+    <td>${escapeHtml(user.email)}</td>
+    <td><b class="status-badge ${userStatusClass(user.status)}">${escapeHtml(user.status)}</b></td>
+    <td>${user.status === "MENUNGGU" ? "Belum ditetapkan" : escapeHtml(user.role || "—")}</td>
+    <td>${userDecisionControls(user)}</td>
+  </tr>`).join("");
+  elements.userManagementCards.innerHTML = loadedUsers.map((user) => `<article class="item-card user-record">
+    <div><small>${escapeHtml(user.userId)}</small><b>${escapeHtml(user.nama || "—")}</b></div>
+    <p>${escapeHtml(user.email)}</p>
+    <p><b class="status-badge ${userStatusClass(user.status)}">${escapeHtml(user.status)}</b> · ${escapeHtml(user.role || "Peranan belum ditetapkan")}</p>
+    ${userDecisionControls(user, true)}
+  </article>`).join("");
+}
+
+async function loadUsersData(accessToken) {
+  if (!canManageUsers() || !accessToken) return;
+  setUserManagementState("loading", "Memuatkan pengguna dan permohonan akses…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/users`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` }
+    });
+    const data = await response.json();
+    if (response.status === 401) {
+      showAccessGate("Sesi anda telah tamat. Log keluar dan masuk semula.", "logout");
+      return;
+    }
+    if (!response.ok || data.success !== true || !Array.isArray(data.users)) {
+      throw new Error(data.error || "USER_LIST_FAILED");
+    }
+    loadedUsers = data.users;
+    usersLoaded = true;
+    renderUsers();
+    setUserManagementState("ready", "");
+  } catch {
+    setUserManagementState("error", "Senarai pengguna tidak dapat dimuatkan.", true);
+  }
+}
+
+function ensureUsersData(accessToken) {
+  if (!canManageUsers() || !accessToken || usersLoaded) return usersRequest;
+  if (!usersRequest) usersRequest = loadUsersData(accessToken).finally(() => { usersRequest = null; });
+  return usersRequest;
+}
+
+async function refreshUsersData() {
+  usersLoaded = false;
+  loadedUsers = [];
+  if (!currentSession?.access_token) return;
+  await ensureUsersData(currentSession.access_token);
+}
+
+async function submitUserDecision(button) {
+  if (userDecisionSubmitting || !canManageUsers() || !currentSession?.access_token) return;
+  const userId = button.dataset.userId;
+  const action = button.dataset.userAction;
+  const record = button.closest(".user-record");
+  const role = record?.querySelector("[data-user-role]")?.value || "VIEWER";
+  if (!userId || !["approve", "reject"].includes(action)) return;
+  userDecisionSubmitting = true;
+  document.querySelectorAll("[data-user-action]").forEach((control) => { control.disabled = true; });
+  setUserManagementState("loading", action === "approve" ? "Meluluskan akses dan menghantar notifikasi…" : "Menolak permohonan akses…");
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/${action}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentSession.access_token}`
+      },
+      body: JSON.stringify(action === "approve" ? { role } : {})
+    });
+    const data = await response.json();
+    if (!response.ok || data.success !== true) throw new Error(data.error || "USER_DECISION_FAILED");
+    await refreshUsersData();
+    const message = action === "approve"
+      ? data.notification?.sent
+        ? "Akses diluluskan dan e-mel telah dihantar."
+        : data.notification?.reason === "ALREADY_SENT"
+          ? "Akses telah diluluskan dan e-mel kelulusan pernah dihantar."
+          : "Akses diluluskan. E-mel belum dihantar kerana perkhidmatan e-mel belum dikonfigurasi atau gagal."
+      : "Permohonan akses telah ditolak.";
+    setUserManagementState("success", message);
+  } catch {
+    setUserManagementState("error", "Keputusan akses tidak dapat disimpan. Muat semula dan cuba lagi.", true);
+  } finally {
+    userDecisionSubmitting = false;
+    document.querySelectorAll("[data-user-action]").forEach((control) => { control.disabled = false; });
+  }
+}
+
 function showView(hash) {
   const register = hash === "#daftar-item";
   const incoming = hash === "#barang-masuk";
+  const outgoing = hash === "#barang-keluar";
   const transactions = hash === "#transaksi";
-  elements.dashboardView.hidden = register || incoming || transactions;
+	const users = hash === "#pengguna" && canManageUsers();
+  elements.dashboardView.hidden = register || incoming || outgoing || transactions || users;
   elements.registerView.hidden = !register;
   elements.incomingView.hidden = !incoming;
+  elements.outgoingView.hidden = !outgoing;
   elements.transactionView.hidden = !transactions;
-  const viewTitle = register ? "Daftar Item" : incoming ? "Barang Masuk" : transactions ? "Transaksi" : "Dashboard";
+	elements.userManagementView.hidden = !users;
+  const viewTitle = register ? "Daftar Item" : incoming ? "Barang Masuk" : outgoing ? "Barang Keluar" : transactions ? "Transaksi" : users ? "Pengguna" : "Dashboard";
   document.title = `${viewTitle} | ITU eSTOR`;
-  searchBox.hidden = register || incoming || transactions;
+  searchBox.hidden = register || incoming || outgoing || transactions || users;
   navLinks.forEach((link) => {
-    const target = register ? "#daftar-item" : incoming ? "#barang-masuk" : transactions ? "#transaksi" : "#dashboard";
+    const target = register ? "#daftar-item" : incoming ? "#barang-masuk" : outgoing ? "#barang-keluar" : transactions ? "#transaksi" : users ? "#pengguna" : "#dashboard";
     const active = link.getAttribute("href") === target;
     link.classList.toggle("active", active);
     if (active) link.setAttribute("aria-current", "page");
@@ -1111,10 +1469,12 @@ function showView(hash) {
   });
   if (register && loadedItems.length) renderRegister();
   if (incoming && loadedItems.length) populateIncomingItems();
+  if (outgoing && loadedItems.length) populateOutgoingItems();
   if (transactions) {
     renderTransactions();
     if (!transactionsLoaded && currentSession?.access_token) ensureTransactionsData(currentSession.access_token);
   }
+	if (users && currentSession?.access_token) ensureUsersData(currentSession.access_token);
 }
 
 function renderItemDetails(item) {
@@ -1392,6 +1752,8 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   openedItemId = "";
   incomingAttemptKey = "";
   incomingAttemptFingerprint = "";
+  outgoingAttemptKey = "";
+  outgoingAttemptFingerprint = "";
   createItemAttemptKey = "";
   createItemAttemptFingerprint = "";
   createdItemForIncoming = null;
@@ -1405,9 +1767,11 @@ function showSignedOut(message = "Sila log masuk untuk meneruskan.") {
   authRetryMode = "auth";
   document.body.className = "auth-signed-out";
   elements.userProfile.hidden = true;
+  elements.userManagementNav.hidden = true;
   elements.googleLogin.disabled = false;
   elements.googleLogin.hidden = false;
   elements.googleLogin.textContent = "Log masuk dengan Google";
+  elements.authLogout.hidden = true;
   elements.authRetry.textContent = "Cuba lagi";
   setAuthState("signed-out", message);
 }
@@ -1437,6 +1801,7 @@ function showAuthorizedUser(session, applicationUser) {
   if (roleLabel) roleLabel.textContent = applicationUser.role;
   elements.userProfile.hidden = false;
   currentApplicationUser = applicationUser;
+  elements.userManagementNav.hidden = !canManageUsers();
   const mayCreateItems = canCreateItem();
   elements.openCreateItem.hidden = !mayCreateItems;
   elements.createItemSubmit.disabled = !mayCreateItems;
@@ -1447,12 +1812,19 @@ function showAuthorizedUser(session, applicationUser) {
   const canWrite = ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"].includes(applicationUser.role);
   elements.incomingSubmit.disabled = !canWrite;
   elements.incomingSubmit.title = canWrite ? "" : "Peranan ini tidak dibenarkan merekod Barang Masuk.";
+  elements.outgoingSubmit.disabled = !canWrite;
+  elements.outgoingSubmit.title = canWrite ? "" : "Peranan ini tidak dibenarkan merekod Barang Keluar.";
   if (!canWrite) {
     setIncomingState("error", "Peranan anda boleh membaca inventori tetapi tidak boleh merekod Barang Masuk.");
+    setOutgoingState("error", "Peranan anda boleh membaca inventori tetapi tidak boleh merekod Barang Keluar.");
+  } else {
+    setIncomingState("ready", "");
+    setOutgoingState("ready", "");
   }
   accessGranted = true;
   document.body.className = "auth-signed-in";
   cleanOAuthUrl();
+  showView(window.location.hash);
 }
 
 function accessErrorMessage(status, code) {
@@ -1462,6 +1834,8 @@ function accessErrorMessage(status, code) {
   const messages = {
     EMAIL_REQUIRED: "Akaun Google ini tidak mempunyai e-mel yang boleh disahkan.",
     USER_NOT_REGISTERED: "E-mel anda belum didaftarkan untuk mengakses ITU eSTOR.",
+    USER_PENDING: "Permohonan akses anda sedang menunggu kelulusan pentadbir.",
+    USER_REJECTED: "Permohonan akses anda telah ditolak. Hubungi pentadbir eSTOR.",
     USER_INACTIVE: "Akses pengguna anda tidak aktif.",
     ROLE_NOT_ALLOWED: "Peranan pengguna anda tidak dibenarkan."
   };
@@ -1477,6 +1851,24 @@ function showAccessGate(message, mode) {
   elements.googleLogin.hidden = true;
   elements.authRetry.hidden = false;
   elements.authRetry.textContent = mode === "logout" ? "Log keluar" : "Cuba lagi";
+  elements.authLogout.hidden = true;
+}
+
+function showPendingAccess(created = false) {
+  accessGranted = false;
+  authRetryMode = "access";
+  document.body.className = "auth-pending";
+  elements.userProfile.hidden = true;
+  elements.googleLogin.hidden = true;
+  setAuthState(
+    "error",
+    created
+      ? "Permohonan akses telah dihantar. Sila tunggu kelulusan pentadbir."
+      : "Permohonan akses anda masih menunggu kelulusan pentadbir."
+  );
+  elements.authRetry.hidden = false;
+  elements.authRetry.textContent = "Semak status";
+  elements.authLogout.hidden = false;
 }
 
 async function checkApplicationAccess(session) {
@@ -1489,7 +1881,8 @@ async function checkApplicationAccess(session) {
   currentSession = session;
   document.body.className = "auth-pending";
   elements.userProfile.hidden = true;
-  setAuthState("loading", "Menyemak akses aplikasiâ€¦");
+  elements.authLogout.hidden = true;
+  setAuthState("loading", "Menyemak akses aplikasi…");
 
   accessRequest = (async () => {
     let response;
@@ -1513,6 +1906,10 @@ async function checkApplicationAccess(session) {
       return;
     }
 
+    if (response.status === 202 && data.success === true && data.access === "pending") {
+      showPendingAccess(Boolean(data.created));
+      return;
+    }
     if (response.status === 401 || response.status === 403) {
       showAccessGate(accessErrorMessage(response.status, data.error), "logout");
       return;
@@ -1712,6 +2109,7 @@ async function loadDashboardData(accessToken) {
     renderDashboard(loadedItems, data.count);
     populateRegisterFilters();
     populateIncomingItems();
+    populateOutgoingItems();
     renderRegister();
     if (!elements.itemModal.hidden && openedItemId) {
       const openedItem = loadedItems.find((item) => String(item.itemId) === openedItemId);
@@ -1774,7 +2172,7 @@ drawerBackdrop.addEventListener("click", () => toggleSidebar(false));
 navLinks.forEach((link) => {
   link.addEventListener("click", () => {
     const target = link.getAttribute("href");
-    if (["#dashboard", "#daftar-item", "#barang-masuk", "#transaksi"].includes(target)) showView(target);
+    if (["#dashboard", "#daftar-item", "#barang-masuk", "#barang-keluar", "#transaksi", "#pengguna"].includes(target)) showView(target);
     if (window.innerWidth <= 960) toggleSidebar(false);
   });
 });
@@ -1822,6 +2220,7 @@ searchInput.addEventListener("input", () => {
 elements.retryData.addEventListener("click", retryInventoryData);
 elements.registerRetry.addEventListener("click", retryInventoryData);
 elements.retryTransactions.addEventListener("click", refreshTransactionsData);
+elements.retryUsers.addEventListener("click", refreshUsersData);
 elements.openCreateItem.addEventListener("click", () => openCreateItemPanel());
 elements.closeCreateItem.addEventListener("click", closeCreateItemPanel);
 [
@@ -1834,6 +2233,9 @@ elements.continueToIncoming.addEventListener("click", continueCreatedItemToIncom
 elements.quickBarangMasuk.addEventListener("click", () => {
   window.location.hash = "#barang-masuk";
 });
+elements.quickBarangKeluar.addEventListener("click", () => {
+  window.location.hash = "#barang-keluar";
+});
 elements.incomingItemSearch.addEventListener("input", populateIncomingItems);
 elements.incomingItem.addEventListener("change", () => {
   elements.incomingUnitCost.value = "";
@@ -1845,6 +2247,17 @@ elements.incomingItem.addEventListener("change", () => {
 ].forEach((control) => control.addEventListener("input", markIncomingMaterialChange));
 elements.incomingForm.addEventListener("submit", submitIncomingTransaction);
 elements.retryIncoming.addEventListener("click", submitIncomingTransaction);
+elements.outgoingItemSearch.addEventListener("input", populateOutgoingItems);
+elements.outgoingItem.addEventListener("change", () => {
+  updateOutgoingItemSummary();
+  markOutgoingMaterialChange();
+});
+[
+  elements.outgoingQuantity, elements.outgoingRecipient, elements.outgoingDepartment,
+  elements.outgoingPurpose, elements.outgoingNotes
+].forEach((control) => control.addEventListener("input", markOutgoingMaterialChange));
+elements.outgoingForm.addEventListener("submit", submitOutgoingTransaction);
+elements.retryOutgoing.addEventListener("click", submitOutgoingTransaction);
 elements.registerMissingItem.addEventListener("click", () => {
   const query = elements.incomingItemSearch.value.trim();
   window.location.hash = "#daftar-item";
@@ -1944,6 +2357,13 @@ elements.cancelTransactionModal.addEventListener("click", (event) => {
 elements.cancelTransactionForm.addEventListener("submit", submitCancellation);
 elements.googleLogin.addEventListener("click", signInWithGoogle);
 elements.logoutButton.addEventListener("click", signOut);
+elements.authLogout.addEventListener("click", signOut);
+[
+  elements.userManagementRows, elements.userManagementCards
+].forEach((container) => container.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-user-action]");
+  if (button) submitUserDecision(button);
+}));
 elements.authRetry.addEventListener("click", () => {
   if (authRetryMode === "logout") {
     signOut();

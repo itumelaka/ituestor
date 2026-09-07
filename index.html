@@ -30,6 +30,7 @@
         Log masuk dengan Google
       </button>
       <button class="auth-retry" id="authRetry" type="button" hidden>Cuba lagi</button>
+      <button class="auth-secondary" id="authLogout" type="button" hidden>Log keluar</button>
       <small>Akses aplikasi tertakluk pada pengesahan pengguna. Log masuk tidak memberikan peranan pentadbir.</small>
     </div>
   </section>
@@ -54,7 +55,7 @@
         <a class="nav-link" href="#stok-semasa"><span>📦</span>Stok Semasa</a>
         <a class="nav-link" href="#laporan"><span>📊</span>Laporan</a>
         <a class="nav-link" href="#carian"><span>🔍</span>Carian</a>
-        <a class="nav-link" href="#pengguna"><span>👥</span>Pengguna</a>
+        <a class="nav-link" id="userManagementNav" href="#pengguna" hidden><span>👥</span>Pengguna</a>
         <a class="nav-link" href="#tetapan"><span>⚙️</span>Tetapan</a>
       </nav>
 
@@ -155,7 +156,7 @@
           <h3 id="quick-title">PINTASAN PANTAS</h3>
           <div class="quick-row">
             <button class="quick quick-blue" id="quickBarangMasuk" type="button"><i>📥</i><span>BARANG<br>MASUK</span></button>
-            <button class="quick quick-green" type="button"><i>📤</i><span>BARANG<br>KELUAR</span></button>
+            <button class="quick quick-green" id="quickBarangKeluar" type="button"><i>📤</i><span>BARANG<br>KELUAR</span></button>
             <button class="quick quick-yellow" type="button"><i>📋</i><span>PERMOHONAN<br>BARU</span></button>
             <button class="quick quick-purple" type="button"><i>📊</i><span>LAPORAN</span></button>
             <button class="quick quick-sky" type="button"><i>🔍</i><span>CARI ITEM</span></button>
@@ -375,6 +376,80 @@
         </section>
       </main>
 
+      <main id="barang-keluar" class="page-view incoming-page outgoing-page" hidden>
+        <section class="register-heading">
+          <div>
+            <p class="eyebrow">TRANSAKSI INVENTORI</p>
+            <h1>Barang Keluar</h1>
+            <p>Rekod pengeluaran stok sebenar. Baki disemak semula oleh pelayan sebelum transaksi disahkan.</p>
+          </div>
+          <span class="register-icon" aria-hidden="true">📤</span>
+        </section>
+
+        <div class="data-state is-ready" id="outgoingState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="outgoingStateMessage"></span>
+          <button id="retryOutgoing" type="button" hidden>Cuba hantar semula</button>
+        </div>
+
+        <section class="incoming-layout">
+          <form id="outgoingForm" class="incoming-form" novalidate>
+            <div class="form-section">
+              <h2>Maklumat item</h2>
+              <label class="field-wide">
+                <span>Cari item</span>
+                <input id="outgoingItemSearch" type="search" placeholder="Tapis mengikut ID atau nama item" autocomplete="off">
+              </label>
+              <label class="field-wide">
+                <span>Item <b aria-hidden="true">*</b></span>
+                <select id="outgoingItem" required><option value="">Pilih item</option></select>
+              </label>
+              <div class="selected-item"><span id="outgoingItemSummary">Pilih item aktif yang mempunyai stok.</span></div>
+            </div>
+
+            <div class="form-section form-grid incoming-details-grid">
+              <h2 class="field-wide">Butiran pengeluaran</h2>
+              <label>
+                <span>Kuantiti <b aria-hidden="true">*</b></span>
+                <input id="outgoingQuantity" type="number" min="0.01" step="any" inputmode="decimal" required>
+              </label>
+              <label>
+                <span>Penerima <b aria-hidden="true">*</b></span>
+                <input id="outgoingRecipient" type="text" maxlength="160" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Bahagian <b aria-hidden="true">*</b></span>
+                <input id="outgoingDepartment" type="text" maxlength="120" autocomplete="organization" required>
+              </label>
+              <label>
+                <span>Tujuan <b aria-hidden="true">*</b></span>
+                <input id="outgoingPurpose" type="text" maxlength="300" required>
+              </label>
+              <label class="field-wide outgoing-notes-field">
+                <span>Catatan <small>(pilihan)</small></span>
+                <textarea id="outgoingNotes" maxlength="1000" rows="3"></textarea>
+              </label>
+            </div>
+
+            <div class="incoming-submit outgoing-submit">
+              <div><small>Baki selepas</small><strong id="outgoingBalance">—</strong></div>
+              <button id="outgoingSubmit" type="submit">Simpan Barang Keluar</button>
+            </div>
+          </form>
+
+          <aside class="incoming-guide outgoing-guide" aria-label="Panduan Barang Keluar">
+            <h2>Pengeluaran terkawal</h2>
+            <p>Kos item, identiti pencipta, masa, jenis dan status transaksi ditetapkan oleh pelayan.</p>
+            <ul>
+              <li>Jenis transaksi: <strong>KELUAR</strong></li>
+              <li>Status transaksi: <strong>SAH</strong></li>
+              <li>Kuantiti tidak boleh melebihi stok semasa.</li>
+              <li>Transaksi dan audit dilindungi daripada simpanan berganda.</li>
+            </ul>
+          </aside>
+        </section>
+      </main>
+
       <main id="transaksi" class="page-view transaction-register" hidden>
         <section class="register-heading">
           <div>
@@ -420,6 +495,34 @@
             </table>
           </div>
           <div class="item-cards transaction-cards" id="transactionCards"></div>
+        </section>
+      </main>
+
+      <main id="pengguna" class="page-view user-management" hidden>
+        <section class="register-heading">
+          <div>
+            <p class="eyebrow">KAWALAN AKSES</p>
+            <h1>Pengurusan Pengguna</h1>
+            <p>Luluskan permohonan log masuk Google dan tetapkan peranan pengguna eSTOR.</p>
+          </div>
+          <span class="register-icon" aria-hidden="true">👥</span>
+        </section>
+
+        <div class="data-state is-loading" id="userManagementState" role="status" aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <span id="userManagementStateMessage">Memuatkan pengguna…</span>
+          <button id="retryUsers" type="button" hidden>Cuba lagi</button>
+        </div>
+
+        <section class="register-results" aria-labelledby="userManagementSummary">
+          <div class="result-bar"><p id="userManagementSummary">Menunggu data pengguna…</p></div>
+          <div class="register-table-wrap">
+            <table class="register-table user-table">
+              <thead><tr><th>NAMA</th><th>E-MEL</th><th>STATUS</th><th>PERANAN</th><th>TINDAKAN</th></tr></thead>
+              <tbody id="userManagementRows"><tr><td colspan="5" class="empty-state">Menunggu data pengguna…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="item-cards user-cards" id="userManagementCards"></div>
         </section>
       </main>
     </div>

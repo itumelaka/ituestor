@@ -17,7 +17,9 @@
 "required": [
 "GOOGLE_SERVICE_ACCOUNT_EMAIL",
 "GOOGLE_PRIVATE_KEY_ID",
-"GOOGLE_PRIVATE_KEY"
+"GOOGLE_PRIVATE_KEY",
+"EMAIL_WEBHOOK_URL",
+"EMAIL_WEBHOOK_SECRET"
 ]
 },
 "vars": {
@@ -28,6 +30,7 @@
 "TRANSACTIONS_SHEET": "TRANSACTIONS",
 "AUDIT_LOG_SHEET": "AUDIT_LOG",
 "SUPABASE_URL": "https://tzsykhjfhmctasjscwch.supabase.co",
-"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy"
+"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_6CTHYsBbnzVVq-E9jj7UWw_xDkr2axy",
+"APP_URL": "https://itumelaka.github.io/ituestor/"
 }
 }

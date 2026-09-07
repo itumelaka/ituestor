@@ -83,6 +83,7 @@ type TestUserRecord = {
 type AuthenticatedFetchOptions = {
 	verifiedEmail?: string;
 	user?: TestUserRecord | null;
+	users?: TestUserRecord[];
 	inventoryRows?: string[][];
 	googleAuthFailure?: boolean;
 	transactionRows?: string[][];
@@ -97,6 +98,8 @@ type AuthenticatedFetchOptions = {
 	failTransactionRead?: boolean;
 	failStatusUpdate?: boolean;
 	failItemUpdate?: boolean;
+	failUserAppend?: boolean;
+	failUserUpdate?: boolean;
 };
 
 const USERS_HEADERS = [
@@ -150,20 +153,15 @@ function activeUser(overrides: TestUserRecord = {}): TestUserRecord {
 	};
 }
 
-function userSheetValues(user: TestUserRecord | null): string[][] {
-	if (!user) return [USERS_HEADERS];
-
+function userRow(user: TestUserRecord): string[] {
 	return [
-		USERS_HEADERS,
-		[
-			user.userId ?? "",
-			user.nama ?? "",
-			user.email ?? "",
-			user.role ?? "",
-			user.status ?? "",
-			"2026-07-29T09:00:00+08:00",
-			"2026-07-29T09:00:00+08:00",
-		],
+		user.userId ?? "",
+		user.nama ?? "",
+		user.email ?? "",
+		user.role ?? "",
+		user.status ?? "",
+		"2026-07-29T09:00:00+08:00",
+		"2026-07-29T09:00:00+08:00",
 	];
 }
 
@@ -191,6 +189,7 @@ function inventoryRows(count = 130): string[][] {
 function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 	const verifiedEmail = options.verifiedEmail ?? TEST_USER_EMAIL;
 	const user = options.user === undefined ? activeUser() : options.user;
+	const users = (options.users ?? (user ? [user] : [])).map(userRow);
 	const itemHeaders = options.itemHeaders ?? ITEM_HEADERS;
 	const sourceRows = options.inventoryRows ?? inventoryRows();
 	const rows = options.itemHeaders
@@ -212,6 +211,10 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 					? input.toString()
 					: input.url;
 
+		if (url.startsWith("https://script.google.com/macros/s/")) {
+			return Response.json({ ok: true });
+		}
+
 		if (url === `${TEST_SUPABASE_URL}/auth/v1/user`) {
 			const headers = new Headers(init?.headers);
 			expect(headers.get("apikey")).toBe(TEST_SUPABASE_PUBLISHABLE_KEY);
@@ -222,6 +225,7 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 				id: "supabase-user-id",
 				email: verifiedEmail,
 				email_confirmed_at: "2026-07-29T08:00:00.000Z",
+				user_metadata: { full_name: "Pengguna Google" },
 			});
 		}
 
@@ -244,7 +248,7 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 			const decodedUrl = decodeURIComponent(url);
 
 			if (init?.method === "POST" && decodedUrl.endsWith("/values:batchUpdate")) {
-				if (options.failItemUpdate) {
+				if (options.failItemUpdate || options.failUserUpdate) {
 					return Response.json({ error: "write failed" }, { status: 500 });
 				}
 				const body = JSON.parse(String(init?.body)) as {
@@ -253,15 +257,16 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 				};
 				expect(body.valueInputOption).toBe("RAW");
 				for (const update of body.data) {
-					const match = update.range.match(/^MASTER_ITEM!([A-Z]+)(\d+)$/);
-					if (!match) throw new Error(`Julat kemas kini item tidak sah: ${update.range}`);
-					const columnIndex = [...match[1]].reduce(
+					const match = update.range.match(/^(MASTER_ITEM|USERS)!([A-Z]+)(\d+)$/);
+					if (!match) throw new Error(`Julat kemas kini tidak sah: ${update.range}`);
+					const columnIndex = [...match[2]].reduce(
 						(value, character) => value * 26 + character.charCodeAt(0) - 64,
 						0,
 					) - 1;
-					const rowIndex = Number(match[2]) - 2;
-					if (!rows[rowIndex]) throw new Error("Baris item tidak wujud.");
-					rows[rowIndex][columnIndex] = String(update.values[0]?.[0] ?? "");
+					const rowIndex = Number(match[3]) - 2;
+					const targetRows = match[1] === "USERS" ? users : rows;
+					if (!targetRows[rowIndex]) throw new Error("Baris tidak wujud.");
+					targetRows[rowIndex][columnIndex] = String(update.values[0]?.[0] ?? "");
 				}
 				return Response.json({ totalUpdatedRows: 1, totalUpdatedCells: body.data.length });
 			}
@@ -283,11 +288,18 @@ function mockAuthenticatedFetch(options: AuthenticatedFetchOptions = {}) {
 				return Response.json({ updatedRows: 1, updatedCells: 1 });
 			}
 
+			if (decodedUrl.includes("/values/USERS!A:Z:append")) {
+				if (options.failUserAppend) return Response.json({ error: "write failed" }, { status: 500 });
+				const body = JSON.parse(String(init?.body)) as { values: string[][] };
+				users.push(body.values[0] ?? []);
+				return Response.json({ updates: { updatedRows: 1 } });
+			}
+
 			if (decodedUrl.includes("/values/USERS!A:Z")) {
 				return Response.json({
-					range: "USERS!A1:G2",
+					range: `USERS!A1:G${users.length + 1}`,
 					majorDimension: "ROWS",
-					values: userSheetValues(user),
+					values: [USERS_HEADERS, ...users],
 				});
 			}
 
@@ -357,6 +369,7 @@ async function dispatch(
 	method = "GET",
 	headers?: HeadersInit,
 	body?: string,
+	envOverrides: Record<string, unknown> = {},
 ): Promise<Response> {
 	const request = new IncomingRequest(`https://ituestor.test${path}`, {
 		method,
@@ -364,7 +377,7 @@ async function dispatch(
 		body,
 	});
 	const context = createExecutionContext();
-	const response = await worker.fetch(request, createTestEnv(), context);
+	const response = await worker.fetch(request, { ...createTestEnv(), ...envOverrides }, context);
 
 	await waitOnExecutionContext(context);
 	return response;
@@ -398,6 +411,18 @@ function incomingBody(overrides: Record<string, unknown> = {}): string {
 		kuantiti: 5,
 		kosSeunit: 12.5,
 		catatan: "Dokumen DO-001",
+		...overrides,
+	});
+}
+
+function outgoingBody(overrides: Record<string, unknown> = {}): string {
+	return JSON.stringify({
+		itemId: "AT-0001",
+		kuantiti: 5,
+		pihakTerlibat: "Pegawai Penerima",
+		bahagian: "Pentadbiran",
+		tujuan: "Kegunaan pejabat",
+		catatan: "Borang keluar BK-001",
 		...overrides,
 	});
 }
@@ -564,6 +589,7 @@ describe("ITU eSTOR Worker", () => {
 		expect(response.status).toBe(200);
 		expect(body).toEqual({
 			success: true,
+			access: "active",
 			user: {
 				userId: "USR-0001",
 				nama: "ITU Melaka",
@@ -796,14 +822,49 @@ describe("ITU eSTOR Worker", () => {
 		expect(body.error).toBe("USER_INACTIVE");
 	});
 
-	it("rejects an unregistered user", async () => {
-		mockAuthenticatedFetch({ user: null });
+	it("creates and safely replays a pending access request for an unregistered Google user", async () => {
+		const fetchMock = mockAuthenticatedFetch({ user: null, verifiedEmail: "pegawai@example.com" });
 
-		const response = await dispatch("/api/me", "GET", bearerHeaders());
-		const body = await response.json<{ error: string }>();
+		const first = await dispatch("/api/me", "GET", bearerHeaders());
+		const firstBody = await first.json<{
+			success: boolean;
+			access: string;
+			created: boolean;
+			user: Record<string, string>;
+		}>();
+		expect(first.status).toBe(202);
+		expect(firstBody).toMatchObject({
+			success: true,
+			access: "pending",
+			created: true,
+			user: {
+				nama: "Pengguna Google",
+				email: "pegawai@example.com",
+				role: "",
+				status: "MENUNGGU",
+			},
+		});
+		expect(firstBody.user.userId).toMatch(/^USR-[A-F0-9]{24}$/);
 
+		const second = await dispatch("/api/me", "GET", bearerHeaders());
+		const secondBody = await second.json<{ created: boolean; access: string }>();
+		expect(second.status).toBe(202);
+		expect(secondBody).toMatchObject({ created: false, access: "pending" });
+		const userAppends = fetchMock.mock.calls.filter(([input]) =>
+			decodeURIComponent(String(input)).includes("/values/USERS!A:Z:append")
+		);
+		const auditAppends = fetchMock.mock.calls.filter(([input]) =>
+			decodeURIComponent(String(input)).includes("/values/AUDIT_LOG!A:Z:append")
+		);
+		expect(userAppends).toHaveLength(1);
+		expect(auditAppends).toHaveLength(1);
+	});
+
+	it("blocks pending users from inventory until approval", async () => {
+		mockAuthenticatedFetch({ user: activeUser({ role: "", status: "MENUNGGU" }) });
+		const response = await dispatch("/api/items", "GET", bearerHeaders());
 		expect(response.status).toBe(403);
-		expect(body.error).toBe("USER_NOT_REGISTERED");
+		expect((await response.json<{ error: string }>()).error).toBe("USER_PENDING");
 	});
 
 	it("rejects a registered user with an invalid role", async () => {
@@ -816,6 +877,149 @@ describe("ITU eSTOR Worker", () => {
 
 		expect(response.status).toBe(403);
 		expect(body.error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("allows only SUPER_ADMIN to list users and prioritizes pending requests", async () => {
+		mockAuthenticatedFetch({ users: [
+			activeUser(),
+			activeUser({ userId: "USR-PENDING", nama: "Pemohon", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+		] });
+		const response = await dispatch("/api/users", "GET", bearerHeaders());
+		const body = await response.json<{ pending: number; users: Array<Record<string, string>> }>();
+		expect(response.status).toBe(200);
+		expect(body.pending).toBe(1);
+		expect(body.users[0]).toMatchObject({ userId: "USR-PENDING", status: "MENUNGGU" });
+
+		vi.restoreAllMocks();
+		mockAuthenticatedFetch({ user: activeUser({ role: "ADMIN_STOR" }) });
+		const denied = await dispatch("/api/users", "GET", bearerHeaders());
+		expect(denied.status).toBe(403);
+		expect((await denied.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("approves a pending user with a selected role and audit", async () => {
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			users: [
+				activeUser(),
+				activeUser({ userId: "USR-PENDING", nama: "Pemohon", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+			],
+			auditRows: audits,
+		});
+		const response = await dispatch(
+			"/api/users/USR-PENDING/approve",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			JSON.stringify({ role: "PEMBANTU_STOR" }),
+		);
+		const body = await response.json<{
+			user: Record<string, string>;
+			notification: { sent: boolean; reason: string };
+		}>();
+		expect(response.status).toBe(200);
+		expect(body.user).toMatchObject({ role: "PEMBANTU_STOR", status: "AKTIF" });
+		expect(body.notification).toEqual({ sent: false, reason: "NOT_CONFIGURED" });
+		expect(audits).toHaveLength(1);
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("ACTION")]).toBe("APPROVE_ACCESS");
+	});
+
+	it("sends the approval email through the signed Apps Script webhook", async () => {
+		mockAuthenticatedFetch({ users: [
+			activeUser(),
+			activeUser({ userId: "USR-PENDING", nama: "Pemohon", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+		] });
+		const response = await dispatch(
+			"/api/users/USR-PENDING/approve",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			JSON.stringify({ role: "VIEWER" }),
+			{
+				EMAIL_WEBHOOK_URL: "https://script.google.com/macros/s/test-deployment/exec",
+				EMAIL_WEBHOOK_SECRET: "test-webhook-secret-with-sufficient-entropy",
+				APP_URL: "https://itumelaka.github.io/ituestor/",
+			},
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json<{ notification: { sent: boolean } }>()).notification.sent).toBe(true);
+		const webhookCall = vi.mocked(fetch).mock.calls.find(([input]) =>
+			String(input) === "https://script.google.com/macros/s/test-deployment/exec");
+		expect(webhookCall).toBeDefined();
+		const webhookBody = JSON.parse(String(webhookCall?.[1]?.body));
+		expect(webhookBody).toMatchObject({
+			version: "1",
+			to: "pemohon@example.com",
+			name: "Pemohon",
+			role: "VIEWER",
+			appUrl: "https://itumelaka.github.io/ituestor/",
+		});
+		expect(webhookBody.nonce).toMatch(/^[0-9a-f-]{36}$/);
+		expect(webhookBody.signature).toMatch(/^[A-Za-z0-9_-]{43}$/);
+	});
+
+	it("does not resend an approval notification already recorded in the audit log", async () => {
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ users: [
+			activeUser(),
+			activeUser({ userId: "USR-PENDING", nama: "Pemohon", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+		], auditRows: audits });
+		const environment = {
+			EMAIL_WEBHOOK_URL: "https://script.google.com/macros/s/test-deployment/exec",
+			EMAIL_WEBHOOK_SECRET: "test-webhook-secret-with-sufficient-entropy",
+		};
+		const first = await dispatch(
+			"/api/users/USR-PENDING/approve",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			JSON.stringify({ role: "VIEWER" }),
+			environment,
+		);
+		expect((await first.json<{ notification: { sent: boolean } }>()).notification.sent).toBe(true);
+		expect(audits.filter((row) => row[AUDIT_HEADERS.indexOf("ACTION")] === "SEND_ACCESS_APPROVED_EMAIL")).toHaveLength(1);
+
+		const replay = await dispatch(
+			"/api/users/USR-PENDING/approve",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			JSON.stringify({ role: "VIEWER" }),
+			environment,
+		);
+		const replayBody = await replay.json<{ replayed: boolean; notification: { sent: boolean; reason: string } }>();
+		expect(replayBody.replayed).toBe(true);
+		expect(replayBody.notification).toEqual({ sent: false, reason: "ALREADY_SENT" });
+		expect(audits.filter((row) => row[AUDIT_HEADERS.indexOf("ACTION")] === "SEND_ACCESS_APPROVED_EMAIL")).toHaveLength(1);
+	});
+
+	it("rejects a pending access request without assigning a role", async () => {
+		mockAuthenticatedFetch({ users: [
+			activeUser(),
+			activeUser({ userId: "USR-PENDING", nama: "Pemohon", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+		] });
+		const response = await dispatch(
+			"/api/users/USR-PENDING/reject",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			"{}",
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json<{ user: Record<string, string> }>()).user).toMatchObject({
+			role: "",
+			status: "DITOLAK",
+		});
+	});
+
+	it("validates access approval roles", async () => {
+		mockAuthenticatedFetch({ users: [
+			activeUser(),
+			activeUser({ userId: "USR-PENDING", email: "pemohon@example.com", role: "", status: "MENUNGGU" }),
+		] });
+		const response = await dispatch(
+			"/api/users/USR-PENDING/approve",
+			"POST",
+			{ ...bearerHeaders(), "Content-Type": "application/json" },
+			JSON.stringify({ role: "OWNER" }),
+		);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe("VALIDATION_ERROR");
 	});
 
 	it("returns a safe structured error when Google OAuth fails", async () => {
@@ -1724,6 +1928,207 @@ describe("ITU eSTOR Worker", () => {
 		});
 		const response = await dispatch(
 			"/api/transactions/in", "POST", incomingHeaders(), incomingBody(),
+		);
+		const serialized = await response.text();
+		expect(response.status).toBe(500);
+		expect(JSON.parse(serialized).error).toBe("WRITE_FAILED");
+		expect(transactions).toHaveLength(0);
+		expect(audits).toHaveLength(0);
+		expect(serialized).not.toContain(TEST_SUPABASE_ACCESS_TOKEN);
+		expect(serialized).not.toContain(testPrivateKey);
+	});
+
+	it("requires authentication for POST /api/transactions/out", async () => {
+		const response = await dispatch(
+			"/api/transactions/out",
+			"POST",
+			{ "Content-Type": "application/json", "Idempotency-Key": VALID_IDEMPOTENCY_KEY },
+			outgoingBody(),
+		);
+		expect(response.status).toBe(401);
+		expect((await response.json<{ error: string }>()).error).toBe("AUTH_REQUIRED");
+	});
+
+	it("allows write roles and rejects VIEWER for Barang Keluar", async () => {
+		for (const role of ["SUPER_ADMIN", "ADMIN_STOR", "PEMBANTU_STOR"]) {
+			mockAuthenticatedFetch({ user: activeUser({ role }) });
+			const response = await dispatch(
+				"/api/transactions/out", "POST", incomingHeaders(crypto.randomUUID()), outgoingBody(),
+			);
+			expect(response.status).toBe(201);
+			vi.restoreAllMocks();
+		}
+		mockAuthenticatedFetch({ user: activeUser({ role: "VIEWER" }) });
+		const response = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody(),
+		);
+		expect(response.status).toBe(403);
+		expect((await response.json<{ error: string }>()).error).toBe("ROLE_NOT_ALLOWED");
+	});
+
+	it("creates KELUAR using server stock, cost, identity and full audit data", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), transactionRows: transactions, auditRows: audits });
+		const response = await dispatch(
+			"/api/transactions/out",
+			"POST",
+			incomingHeaders(),
+			outgoingBody({
+				kosSeunit: 0.01,
+				jumlahNilai: 0.05,
+				jenis: "MASUK",
+				status: "BATAL",
+				createdByEmail: "attacker@example.invalid",
+			}),
+		);
+		const body = await response.json<{ transaction: Record<string, unknown> }>();
+		expect(response.status).toBe(201);
+		expect(body.transaction).toMatchObject({
+			itemId: "AT-0001",
+			jenis: "KELUAR",
+			kuantiti: 5,
+			kosSeunit: 1234.5,
+			jumlahNilai: 6172.5,
+			pihakTerlibat: "Pegawai Penerima",
+			bahagian: "Pentadbiran",
+			tujuan: "Kegunaan pejabat",
+			catatan: "Borang keluar BK-001",
+			createdByEmail: TEST_USER_EMAIL,
+			createdByName: "ITU Melaka",
+			status: "SAH",
+		});
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+		const stored = Object.fromEntries(
+			TRANSACTION_HEADERS.map((header, index) => [header, transactions[0]?.[index]]),
+		);
+		expect(stored).toMatchObject({
+			JENIS: "KELUAR",
+			KOS_SEUNIT: 1234.5,
+			JUMLAH_NILAI: 6172.5,
+			PIHAK_TERLIBAT: "Pegawai Penerima",
+			BAHAGIAN: "Pentadbiran",
+			TUJUAN: "Kegunaan pejabat",
+			STATUS: "SAH",
+		});
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("AFTER_JSON")]).toContain('"JENIS":"KELUAR"');
+		expect(audits[0]?.[AUDIT_HEADERS.indexOf("CATATAN")]).toContain("Barang Keluar");
+	});
+
+	it.each([
+		["invalid JSON", "{", "INVALID_JSON"],
+		["missing item", outgoingBody({ itemId: "" }), "VALIDATION_ERROR"],
+		["zero quantity", outgoingBody({ kuantiti: 0 }), "VALIDATION_ERROR"],
+		["missing recipient", outgoingBody({ pihakTerlibat: "" }), "VALIDATION_ERROR"],
+		["missing department", outgoingBody({ bahagian: "" }), "VALIDATION_ERROR"],
+		["missing purpose", outgoingBody({ tujuan: "" }), "VALIDATION_ERROR"],
+	])("rejects Barang Keluar %s", async (_label, requestBody, expectedError) => {
+		mockAuthenticatedFetch();
+		const response = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), requestBody,
+		);
+		expect(response.status).toBe(400);
+		expect((await response.json<{ error: string }>()).error).toBe(expectedError);
+	});
+
+	it("rejects missing, inactive and insufficient-stock Barang Keluar items", async () => {
+		mockAuthenticatedFetch();
+		const missing = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ itemId: "TIADA" }),
+		);
+		expect(missing.status).toBe(404);
+		expect((await missing.json<{ error: string }>()).error).toBe("ITEM_NOT_FOUND");
+		vi.restoreAllMocks();
+
+		const inactiveRows = inventoryRows(1);
+		inactiveRows[0]![ITEM_HEADERS.indexOf("STATUS")] = "TIDAK_AKTIF";
+		mockAuthenticatedFetch({ inventoryRows: inactiveRows });
+		const inactive = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody(),
+		);
+		expect(inactive.status).toBe(409);
+		expect((await inactive.json<{ error: string }>()).error).toBe("ITEM_INACTIVE");
+		vi.restoreAllMocks();
+
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1),
+			transactionRows: [transactionRow({ JENIS: "KELUAR", KUANTITI: 10, STATUS: "SAH" })],
+		});
+		const insufficient = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 3 }),
+		);
+		const body = await insufficient.json<{ error: string; stokSemasa: number; kuantitiDiminta: number }>();
+		expect(insufficient.status).toBe(409);
+		expect(body).toMatchObject({ error: "INSUFFICIENT_STOCK", stokSemasa: 2, kuantitiDiminta: 3 });
+	});
+
+	it("allows exact available stock and reflects KELUAR in inventory", async () => {
+		const transactions: string[][] = [];
+		mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), transactionRows: transactions });
+		const created = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 12 }),
+		);
+		expect(created.status).toBe(201);
+		const inventory = await dispatch("/api/items", "GET", bearerHeaders());
+		const item = (await inventory.json<{ items: Array<{ stokSemasa: number; jumlahKeluar: number; statusStok: string }> }>()).items[0];
+		expect(item).toMatchObject({ stokSemasa: 0, jumlahKeluar: 12, statusStok: "HABIS" });
+	});
+
+	it("replays Barang Keluar without a second stock deduction and detects conflicts", async () => {
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({ inventoryRows: inventoryRows(1), transactionRows: transactions, auditRows: audits });
+		const first = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 10 }),
+		);
+		const replay = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 10 }),
+		);
+		expect(first.status).toBe(201);
+		expect(replay.status).toBe(200);
+		expect((await replay.json<{ replayed: boolean }>()).replayed).toBe(true);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+		const conflict = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 9 }),
+		);
+		expect(conflict.status).toBe(409);
+		expect((await conflict.json<{ error: string }>()).error).toBe("IDEMPOTENCY_CONFLICT");
+	});
+
+	it("recovers a Barang Keluar audit failure without duplicating the transaction", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1), transactionRows: transactions, auditRows: audits,
+			failAuditAppendOnce: true,
+		});
+		const first = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 10 }),
+		);
+		expect(first.status).toBe(500);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(0);
+		const retry = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody({ kuantiti: 10 }),
+		);
+		expect(retry.status).toBe(200);
+		expect(transactions).toHaveLength(1);
+		expect(audits).toHaveLength(1);
+	});
+
+	it("returns WRITE_FAILED safely when Barang Keluar append fails", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const transactions: string[][] = [];
+		const audits: string[][] = [];
+		mockAuthenticatedFetch({
+			inventoryRows: inventoryRows(1), transactionRows: transactions, auditRows: audits,
+			failTransactionAppend: true,
+		});
+		const response = await dispatch(
+			"/api/transactions/out", "POST", incomingHeaders(), outgoingBody(),
 		);
 		const serialized = await response.text();
 		expect(response.status).toBe(500);

@@ -163,8 +163,8 @@ Menyimpan profil dan peranan pengguna yang dibenarkan mengakses ITU eSTOR.
 | `USER_ID` | Teks | Ya | ID unik dalaman, contoh `USR-000001`; boleh dipautkan kepada ID Supabase. |
 | `NAMA` | Teks | Ya | Nama paparan rasmi. |
 | `EMAIL` | E-mel | Ya | Unik, ditrim dan ditukar kepada huruf kecil. |
-| `ROLE` | Enum | Ya | `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR`, `VIEWER`. |
-| `STATUS` | Enum | Ya | `AKTIF`, `DIGANTUNG`, `TIDAK_AKTIF`. |
+| `ROLE` | Enum | Bersyarat | Kosong semasa permohonan `MENUNGGU`; selepas kelulusan: `SUPER_ADMIN`, `ADMIN_STOR`, `PEMBANTU_STOR` atau `VIEWER`. |
+| `STATUS` | Enum | Ya | `MENUNGGU`, `AKTIF`, `DITOLAK`, `DIGANTUNG`, `TIDAK_AKTIF`. |
 | `CREATED_AT` | Timestamp | Ya | Masa pengguna didaftarkan. |
 | `UPDATED_AT` | Timestamp | Ya | Masa perubahan terakhir. |
 
@@ -179,11 +179,12 @@ STATUS: AKTIF
 
 ### Validasi dan hubungan
 
-- Pengesahan Google melalui Supabase tidak secara automatik memberi akses aplikasi.
+- Log masuk Google pertama bagi e-mel yang belum wujud mencipta permohonan `MENUNGGU`; ia tidak memberi akses data aplikasi.
 - Nama, e-mel dan imej profil daripada Google ialah identiti, bukan bukti peranan aplikasi.
 - Worker mengesahkan token melalui Supabase sebelum membaca rekod `USERS`.
 - E-mel yang telah disahkan dinormalkan dengan `trim()` dan huruf kecil sebelum padanan tepat.
-- E-mel mesti wujud dalam `USERS`, berstatus `AKTIF`, dan mempunyai salah satu peranan yang dibenarkan.
+- E-mel mesti berstatus `AKTIF` dan mempunyai salah satu peranan yang dibenarkan sebelum data aplikasi boleh dibaca.
+- Hanya `SUPER_ADMIN` boleh meluluskan atau menolak permohonan akses dan menetapkan peranan.
 - Pengguna tidak berdaftar, tidak aktif atau mempunyai peranan tidak sah ditolak sebelum data inventori dibaca.
 - Hanya `SUPER_ADMIN` boleh mengubah peranan dan tetapan kritikal.
 - E-mel pengguna dirujuk oleh transaksi, permohonan, audit dan tetapan.

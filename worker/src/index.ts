@@ -7,6 +7,9 @@ interface Env {
 	AUDIT_LOG_SHEET: string;
 	SUPABASE_URL: string;
 	SUPABASE_PUBLISHABLE_KEY: string;
+	APP_URL?: string;
+	EMAIL_WEBHOOK_URL?: string;
+	EMAIL_WEBHOOK_SECRET?: string;
 	GOOGLE_SERVICE_ACCOUNT_EMAIL: string;
 	GOOGLE_PRIVATE_KEY_ID: string;
 	GOOGLE_PRIVATE_KEY: string;
@@ -68,6 +71,15 @@ interface SupabaseUser {
 	id?: string;
 	email?: string;
 	email_confirmed_at?: string | null;
+	user_metadata?: {
+		full_name?: string;
+		name?: string;
+	};
+}
+
+interface VerifiedIdentity {
+	email: string;
+	nama: string;
 }
 
 interface AuthorizedUser {
@@ -76,6 +88,10 @@ interface AuthorizedUser {
 	email: string;
 	role: string;
 	status: string;
+}
+
+interface AccessDecisionPayload {
+	role: string;
 }
 
 interface IncomingTransactionPayload {
@@ -88,11 +104,20 @@ interface IncomingTransactionPayload {
 	catatan: string;
 }
 
+interface OutgoingTransactionPayload {
+	itemId: string;
+	kuantiti: number;
+	pihakTerlibat: string;
+	bahagian: string;
+	tujuan: string;
+	catatan: string;
+}
+
 interface TransactionResult {
 	transactionId: string;
 	timestamp: string;
 	itemId: string;
-	jenis: "MASUK";
+	jenis: "MASUK" | "KELUAR";
 	kuantiti: number;
 	kosSeunit: number;
 	jumlahNilai: number;
@@ -569,6 +594,21 @@ function validateIncomingTransaction(value: unknown): IncomingTransactionPayload
 	};
 }
 
+function validateOutgoingTransaction(value: unknown): OutgoingTransactionPayload {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Maklumat transaksi tidak sah.");
+	}
+	const body = value as Record<string, unknown>;
+	return {
+		itemId: requiredText(body.itemId, "Item", 80),
+		kuantiti: requiredNumber(body.kuantiti, "Kuantiti", false, 1_000_000_000),
+		pihakTerlibat: requiredText(body.pihakTerlibat, "Penerima", 160),
+		bahagian: requiredText(body.bahagian, "Bahagian", 120),
+		tujuan: requiredText(body.tujuan, "Tujuan", 300),
+		catatan: requiredText(body.catatan, "Catatan", 1000, true),
+	};
+}
+
 function normalizeSpaces(value: string): string {
 	return value.normalize("NFKC").trim().replace(/\s+/g, " ");
 }
@@ -715,7 +755,7 @@ function idempotencyKey(request: Request): string {
 	return key.toLowerCase();
 }
 
-async function stableId(prefix: "TXN" | "AUD", key: string): Promise<string> {
+async function stableId(prefix: "TXN" | "AUD" | "USR", key: string): Promise<string> {
 	// ID deterministik menjadikan helaian pengeluaran sebagai stor idempotensi
 	// kekal tanpa bergantung pada memori Worker.
 	const digest = await crypto.subtle.digest(
@@ -977,7 +1017,7 @@ function bearerToken(request: Request): string {
 async function verifySupabaseUser(
 	request: Request,
 	env: Env,
-): Promise<{ email: string }> {
+): Promise<VerifiedIdentity> {
 	const token = bearerToken(request);
 	if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY) {
 		throw new ApiError(
@@ -1024,7 +1064,130 @@ async function verifySupabaseUser(
 		);
 	}
 
-	return { email };
+	const metadataName = normalizeSpaces(
+		String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? ""),
+	).replace(/[\u0000-\u001F\u007F]/g, "").slice(0, 160);
+	return {
+		email,
+		nama: metadataName || email.split("@")[0] || "Pengguna eSTOR",
+	};
+}
+
+function userFromRecord(record: Record<string, string>): AuthorizedUser {
+	return {
+		userId: String(record.USER_ID ?? "").trim(),
+		nama: String(record.NAMA ?? "").trim(),
+		email: normalizeEmail(record.EMAIL),
+		role: String(record.ROLE ?? "").trim().toUpperCase(),
+		status: String(record.STATUS ?? "").trim().toUpperCase(),
+	};
+}
+
+function requireSheetHeaders(
+	sheetData: SheetsValuesResponse,
+	requiredHeaders: string[],
+): string[] {
+	const headers = sheetHeaders(sheetData);
+	if (requiredHeaders.some((header) => !headers.includes(header))) {
+		throw new ApiError(500, "WRITE_FAILED", "Struktur data aplikasi tidak lengkap.");
+	}
+	return headers;
+}
+
+function accessRequestRecord(
+	identity: VerifiedIdentity,
+	userId: string,
+	timestamp: string,
+): Record<string, string> {
+	return {
+		USER_ID: userId,
+		NAMA: identity.nama,
+		EMAIL: identity.email,
+		ROLE: "",
+		STATUS: "MENUNGGU",
+		CREATED_AT: timestamp,
+		UPDATED_AT: timestamp,
+	};
+}
+
+async function ensureAccessRequestAudit(
+	env: Env,
+	googleAccessToken: string,
+	user: Record<string, string>,
+): Promise<void> {
+	const auditData = await getSheetValues(env, env.AUDIT_LOG_SHEET, googleAccessToken);
+	const auditId = await stableId("AUD", `access-request:${normalizeEmail(user.EMAIL)}`);
+	if (rowsToRecords(auditData).some((record) => record.AUDIT_ID === auditId)) return;
+	const auditRecord: Record<string, string> = {
+		AUDIT_ID: auditId,
+		TIMESTAMP: user.CREATED_AT || malaysiaTimestamp(),
+		USER_EMAIL: normalizeEmail(user.EMAIL),
+		USER_NAME: user.NAMA,
+		ACTION: "REQUEST_ACCESS",
+		MODULE: "USER",
+		RECORD_ID: user.USER_ID,
+		BEFORE_JSON: "",
+		AFTER_JSON: JSON.stringify(user),
+		CATATAN: "Permohonan akses eSTOR melalui log masuk Google",
+	};
+	await appendSheetRecord(
+		env,
+		env.AUDIT_LOG_SHEET,
+		googleAccessToken,
+		requireSheetHeaders(auditData, ["AUDIT_ID", "ACTION", "MODULE", "RECORD_ID"]),
+		auditRecord,
+	);
+}
+
+function pendingAccessResponse(user: AuthorizedUser, created: boolean): Response {
+	return Response.json({
+		success: true,
+		access: "pending",
+		created,
+		user,
+	}, { status: 202 });
+}
+
+async function meRoute(request: Request, env: Env): Promise<Response> {
+	const identity = await verifySupabaseUser(request, env);
+	const googleAccessToken = await getGoogleAccessToken(env);
+	const usersData = await getSheetValues(env, env.USERS_SHEET, googleAccessToken);
+	let record = rowsToRecords(usersData).find(
+		(candidate) => normalizeEmail(candidate.EMAIL) === identity.email,
+	);
+
+	if (!record) {
+		const timestamp = malaysiaTimestamp();
+		const userId = await stableId("USR", identity.email);
+		record = accessRequestRecord(identity, userId, timestamp);
+		await appendSheetRecord(
+			env,
+			env.USERS_SHEET,
+			googleAccessToken,
+			requireSheetHeaders(usersData, [
+				"USER_ID", "NAMA", "EMAIL", "ROLE", "STATUS", "CREATED_AT", "UPDATED_AT",
+			]),
+			record,
+		);
+		await ensureAccessRequestAudit(env, googleAccessToken, record);
+		return pendingAccessResponse(userFromRecord(record), true);
+	}
+
+	const user = userFromRecord(record);
+	if (user.status === "MENUNGGU") {
+		await ensureAccessRequestAudit(env, googleAccessToken, record);
+		return pendingAccessResponse(user, false);
+	}
+	if (user.status === "DITOLAK") {
+		throw new ApiError(403, "USER_REJECTED", "Permohonan akses pengguna telah ditolak.");
+	}
+	if (user.status !== "AKTIF") {
+		throw new ApiError(403, "USER_INACTIVE", "Akses pengguna tidak aktif.");
+	}
+	if (!ALLOWED_ROLES.has(user.role)) {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Peranan pengguna tidak dibenarkan.");
+	}
+	return Response.json({ success: true, access: "active", user });
 }
 
 async function authorizeRequest(
@@ -1050,7 +1213,14 @@ async function authorizeRequest(
 		);
 	}
 
-	const status = String(record.STATUS ?? "").trim().toUpperCase();
+	const user = userFromRecord(record);
+	const status = user.status;
+	if (status === "MENUNGGU") {
+		throw new ApiError(403, "USER_PENDING", "Permohonan akses sedang menunggu kelulusan.");
+	}
+	if (status === "DITOLAK") {
+		throw new ApiError(403, "USER_REJECTED", "Permohonan akses pengguna telah ditolak.");
+	}
 	if (status !== "AKTIF") {
 		throw new ApiError(
 			403,
@@ -1059,7 +1229,7 @@ async function authorizeRequest(
 		);
 	}
 
-	const role = String(record.ROLE ?? "").trim().toUpperCase();
+	const role = user.role;
 	if (!ALLOWED_ROLES.has(role)) {
 		throw new ApiError(
 			403,
@@ -1069,13 +1239,7 @@ async function authorizeRequest(
 	}
 
 	return {
-		user: {
-			userId: record.USER_ID,
-			nama: record.NAMA,
-			email: identity.email,
-			role,
-			status,
-		},
+		user: { ...user, email: identity.email, role, status },
 		googleAccessToken,
 	};
 }
@@ -1087,6 +1251,32 @@ function roundDecimal(value: number, decimalPlaces = 10): number {
 
 function roundMoney(value: number): number {
 	return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function sheetNumber(value: unknown): number | null {
+	const normalized = String(value ?? "")
+		.replace(/RM/gi, "")
+		.replace(/,/g, "")
+		.trim();
+	if (!normalized) return null;
+	const number = Number(normalized);
+	return Number.isFinite(number) ? number : null;
+}
+
+function currentStockForItem(
+	item: Record<string, string>,
+	transactionsData: SheetsValuesResponse,
+): number {
+	const itemId = String(item.ITEM_ID ?? "").trim();
+	const stokAwal = sheetNumber(item.STOK_AWAL);
+	if (stokAwal === null) {
+		throw new ApiError(500, "WRITE_FAILED", "Baki stok item tidak dapat disahkan.");
+	}
+	const movement = aggregateStockMovements(transactionsData, new Set([itemId])).get(itemId) ?? {
+		jumlahMasuk: 0,
+		jumlahKeluar: 0,
+	};
+	return roundDecimal(stokAwal + movement.jumlahMasuk - movement.jumlahKeluar);
 }
 
 interface StockMovement {
@@ -1486,6 +1676,255 @@ async function cancelTransactionRoute(
 		);
 	}
 	return cancellationResponse(verifiedRecord, finalAudit, false);
+}
+
+function normalizedUserId(value: string): string {
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(value);
+	} catch {
+		throw new ApiError(404, "USER_NOT_FOUND", "Pengguna tidak ditemui.");
+	}
+	const userId = normalizeSpaces(decoded);
+	if (!/^USR-[A-Z0-9-]{4,64}$/i.test(userId)) {
+		throw new ApiError(404, "USER_NOT_FOUND", "Pengguna tidak ditemui.");
+	}
+	return userId;
+}
+
+function validateAccessDecision(value: unknown): AccessDecisionPayload {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Peranan pengguna diperlukan.");
+	}
+	const role = normalizeSpaces(String((value as Record<string, unknown>).role ?? ""))
+		.toLocaleUpperCase("ms");
+	if (!ALLOWED_ROLES.has(role)) {
+		throw new ApiError(400, "VALIDATION_ERROR", "Peranan pengguna tidak sah.");
+	}
+	return { role };
+}
+
+function publicAccessUser(record: Record<string, string>): AuthorizedUser & {
+	createdAt: string;
+	updatedAt: string;
+} {
+	return {
+		...userFromRecord(record),
+		createdAt: String(record.CREATED_AT ?? "").trim(),
+		updatedAt: String(record.UPDATED_AT ?? "").trim(),
+	};
+}
+
+function base64Url(bytes: Uint8Array): string {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function emailWebhookMessage(values: string[]): string {
+	return values.map((value) => `${value.length}:${value}`).join("|");
+}
+
+async function emailWebhookSignature(secret: string, message: string): Promise<string> {
+	const encoder = new TextEncoder();
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(message))));
+}
+
+function isAppsScriptWebhookUrl(value: string): boolean {
+	try {
+		const url = new URL(value);
+		return url.protocol === "https:" &&
+			url.hostname === "script.google.com" &&
+			/^\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url.pathname) &&
+			!url.search &&
+			!url.hash;
+	} catch {
+		return false;
+	}
+}
+
+async function sendAccessApprovedEmail(
+	env: Env,
+	user: AuthorizedUser,
+): Promise<{ sent: boolean; reason?: "NOT_CONFIGURED" | "FAILED" | "ALREADY_SENT" }> {
+	if (
+		!env.EMAIL_WEBHOOK_URL ||
+		!isAppsScriptWebhookUrl(env.EMAIL_WEBHOOK_URL) ||
+		!env.EMAIL_WEBHOOK_SECRET ||
+		env.EMAIL_WEBHOOK_SECRET.length < 32
+	) {
+		return { sent: false, reason: "NOT_CONFIGURED" };
+	}
+	const appUrl = env.APP_URL || "https://itumelaka.github.io/ituestor/";
+	const sentAt = String(Math.floor(Date.now() / 1000));
+	const nonce = crypto.randomUUID();
+	const values = ["1", sentAt, nonce, user.email, user.nama || user.email, user.role, appUrl];
+	try {
+		const signature = await emailWebhookSignature(
+			env.EMAIL_WEBHOOK_SECRET,
+			emailWebhookMessage(values),
+		);
+		const response = await fetch(env.EMAIL_WEBHOOK_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				version: "1",
+				sentAt,
+				nonce,
+				to: user.email,
+				name: user.nama || user.email,
+				role: user.role,
+				appUrl,
+				signature,
+			}),
+		});
+		const contentLength = Number(response.headers.get("Content-Length") || "0");
+		if (contentLength > 16_384) throw new Error("Email webhook response is too large");
+		const result = await response.json<{ ok?: boolean }>();
+		if (!response.ok || result.ok !== true) throw new Error(`Email webhook returned ${response.status}`);
+		return { sent: true };
+	} catch (error) {
+		console.error(JSON.stringify({
+			message: "access approval email failed",
+			userId: user.userId,
+			error: error instanceof Error ? error.message : "Unknown email error",
+		}));
+		return { sent: false, reason: "FAILED" };
+	}
+}
+
+async function userListRoute(request: Request, env: Env): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (authorization.user.role !== "SUPER_ADMIN") {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Hanya SUPER_ADMIN boleh mengurus pengguna.");
+	}
+	const usersData = await getSheetValues(env, env.USERS_SHEET, authorization.googleAccessToken);
+	const statusOrder = new Map([["MENUNGGU", 0], ["AKTIF", 1], ["DIGANTUNG", 2], ["TIDAK_AKTIF", 3], ["DITOLAK", 4]]);
+	const users = rowsToRecords(usersData).map(publicAccessUser).sort((left, right) => {
+		const statusDifference = (statusOrder.get(left.status) ?? 9) - (statusOrder.get(right.status) ?? 9);
+		return statusDifference || left.nama.localeCompare(right.nama, "ms");
+	});
+	return Response.json({
+		success: true,
+		count: users.length,
+		pending: users.filter((user) => user.status === "MENUNGGU").length,
+		users,
+	});
+}
+
+async function decideAccessRoute(
+	request: Request,
+	env: Env,
+	userIdInput: string,
+	action: "approve" | "reject",
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (authorization.user.role !== "SUPER_ADMIN") {
+		throw new ApiError(403, "ROLE_NOT_ALLOWED", "Hanya SUPER_ADMIN boleh mengurus pengguna.");
+	}
+	const userId = normalizedUserId(userIdInput);
+	const payload = action === "approve"
+		? validateAccessDecision(await readJsonBody(request))
+		: { role: "" };
+	const [usersData, auditData] = await Promise.all([
+		getSheetValues(env, env.USERS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const records = rowsToRecords(usersData);
+	const recordIndex = records.findIndex((candidate) => String(candidate.USER_ID ?? "").trim() === userId);
+	if (recordIndex < 0) throw new ApiError(404, "USER_NOT_FOUND", "Pengguna tidak ditemui.");
+	const record = records[recordIndex];
+	const before = { ...record };
+	const targetStatus = action === "approve" ? "AKTIF" : "DITOLAK";
+	const targetRole = action === "approve" ? payload.role : "";
+	const current = userFromRecord(record);
+	const replayed = current.status === targetStatus && current.role === targetRole;
+	if (!replayed && current.status !== "MENUNGGU") {
+		throw new ApiError(409, "USER_STATUS_CONFLICT", "Status pengguna telah berubah.");
+	}
+
+	const headers = requireSheetHeaders(usersData, ["USER_ID", "ROLE", "STATUS", "UPDATED_AT"]);
+	const updatedAt = replayed ? (record.UPDATED_AT || malaysiaTimestamp()) : malaysiaTimestamp();
+	record.ROLE = targetRole;
+	record.STATUS = targetStatus;
+	record.UPDATED_AT = updatedAt;
+	if (!replayed) {
+		await updateSheetCells(env, env.USERS_SHEET, authorization.googleAccessToken, [
+			{ columnIndex: headers.indexOf("ROLE"), rowNumber: recordIndex + 2, value: targetRole },
+			{ columnIndex: headers.indexOf("STATUS"), rowNumber: recordIndex + 2, value: targetStatus },
+			{ columnIndex: headers.indexOf("UPDATED_AT"), rowNumber: recordIndex + 2, value: updatedAt },
+		]);
+	}
+
+	const auditId = await stableId("AUD", `access-${action}:${userId}:${targetRole}`);
+	const existingAudit = rowsToRecords(auditData).some((candidate) => candidate.AUDIT_ID === auditId);
+	if (!existingAudit) {
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			requireSheetHeaders(auditData, ["AUDIT_ID", "ACTION", "MODULE", "RECORD_ID"]),
+			{
+				AUDIT_ID: auditId,
+				TIMESTAMP: updatedAt,
+				USER_EMAIL: authorization.user.email,
+				USER_NAME: authorization.user.nama,
+				ACTION: action === "approve" ? "APPROVE_ACCESS" : "REJECT_ACCESS",
+				MODULE: "USER",
+				RECORD_ID: userId,
+				BEFORE_JSON: JSON.stringify(before),
+				AFTER_JSON: JSON.stringify(record),
+				CATATAN: action === "approve"
+					? `Akses diluluskan sebagai ${targetRole}`
+					: "Permohonan akses ditolak",
+			},
+		);
+	}
+
+	const user = userFromRecord(record);
+	const emailAuditId = await stableId("AUD", `access-email:${userId}:${targetRole}`);
+	const existingEmailAudit = rowsToRecords(auditData).some((candidate) => candidate.AUDIT_ID === emailAuditId);
+	const notification = action === "approve" && !existingEmailAudit
+		? await sendAccessApprovedEmail(env, user)
+		: {
+			sent: false,
+			reason: action === "approve" && existingEmailAudit
+				? "ALREADY_SENT" as const
+				: "NOT_CONFIGURED" as const,
+		};
+	if (notification.sent) {
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			requireSheetHeaders(auditData, ["AUDIT_ID", "ACTION", "MODULE", "RECORD_ID"]),
+			{
+				AUDIT_ID: emailAuditId,
+				TIMESTAMP: malaysiaTimestamp(),
+				USER_EMAIL: authorization.user.email,
+				USER_NAME: authorization.user.nama,
+				ACTION: "SEND_ACCESS_APPROVED_EMAIL",
+				MODULE: "USER",
+				RECORD_ID: userId,
+				AFTER_JSON: JSON.stringify({ recipient: user.email, provider: "GOOGLE_APPS_SCRIPT" }),
+				CATATAN: "E-mel kelulusan akses dihantar",
+			},
+		);
+	}
+	return Response.json({
+		success: true,
+		replayed,
+		action,
+		user,
+		notification,
+	});
 }
 
 async function protectedRoute(
@@ -1902,6 +2341,142 @@ async function incomingTransactionRoute(
 	);
 }
 
+async function outgoingTransactionRoute(
+	request: Request,
+	env: Env,
+): Promise<Response> {
+	const authorization = await authorizeRequest(request, env);
+	if (!WRITE_ROLES.has(authorization.user.role)) {
+		throw new ApiError(
+			403,
+			"ROLE_NOT_ALLOWED",
+			"Peranan pengguna tidak dibenarkan merekod Barang Keluar.",
+		);
+	}
+
+	const key = idempotencyKey(request);
+	const payload = validateOutgoingTransaction(await readJsonBody(request));
+	const [itemsData, transactionsData, auditData] = await Promise.all([
+		getSheetValues(env, env.MASTER_ITEM_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.TRANSACTIONS_SHEET, authorization.googleAccessToken),
+		getSheetValues(env, env.AUDIT_LOG_SHEET, authorization.googleAccessToken),
+	]);
+	const transactionId = await stableId("TXN", key);
+	const auditId = await stableId("AUD", key);
+	const existingTransaction = rowsToRecords(transactionsData).find(
+		(record) => record.TRANSACTION_ID === transactionId,
+	);
+
+	let result: TransactionResult;
+	if (existingTransaction) {
+		const storedQuantity = sheetNumber(existingTransaction.KUANTITI);
+		const storedCost = sheetNumber(existingTransaction.KOS_SEUNIT);
+		const storedTotal = sheetNumber(existingTransaction.JUMLAH_NILAI);
+		if (storedQuantity === null || storedCost === null || storedTotal === null) {
+			throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Kunci idempotensi telah digunakan untuk permintaan lain.");
+		}
+		result = {
+			transactionId,
+			timestamp: existingTransaction.TIMESTAMP,
+			itemId: payload.itemId,
+			jenis: "KELUAR",
+			kuantiti: payload.kuantiti,
+			kosSeunit: storedCost,
+			jumlahNilai: storedTotal,
+			pihakTerlibat: payload.pihakTerlibat,
+			bahagian: payload.bahagian,
+			tujuan: payload.tujuan,
+			catatan: payload.catatan,
+			createdByName: existingTransaction.CREATED_BY_NAME,
+			createdByEmail: authorization.user.email,
+			status: "SAH",
+		};
+		if (storedQuantity !== payload.kuantiti || !matchesExistingTransaction(existingTransaction, result)) {
+			throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Kunci idempotensi telah digunakan untuk permintaan lain.");
+		}
+	} else {
+		const item = rowsToRecords(itemsData).find(
+			(candidate) => String(candidate.ITEM_ID ?? "").trim() === payload.itemId,
+		);
+		if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", "Item tidak ditemui.");
+		if (String(item.STATUS ?? "").trim().toUpperCase() !== "AKTIF") {
+			throw new ApiError(409, "ITEM_INACTIVE", "Item tidak aktif.");
+		}
+
+		const kosSeunit = sheetNumber(item.KOS_SEUNIT);
+		if (kosSeunit === null || kosSeunit < 0) {
+			throw new ApiError(500, "WRITE_FAILED", "Kos item tidak dapat disahkan.");
+		}
+		const stokSemasa = currentStockForItem(item, transactionsData);
+		if (stokSemasa <= 0 || payload.kuantiti > stokSemasa) {
+			throw new ApiError(
+				409,
+				"INSUFFICIENT_STOCK",
+				"Kuantiti Barang Keluar melebihi baki stok semasa.",
+				{ stokSemasa, kuantitiDiminta: payload.kuantiti },
+			);
+		}
+		const jumlahNilai = roundMoney(payload.kuantiti * kosSeunit);
+		if (!Number.isFinite(jumlahNilai) || jumlahNilai > 1_000_000_000_000) {
+			throw new ApiError(400, "VALIDATION_ERROR", "Jumlah nilai tidak sah.");
+		}
+		result = {
+			transactionId,
+			timestamp: malaysiaTimestamp(),
+			itemId: payload.itemId,
+			jenis: "KELUAR",
+			kuantiti: payload.kuantiti,
+			kosSeunit,
+			jumlahNilai,
+			pihakTerlibat: payload.pihakTerlibat,
+			bahagian: payload.bahagian,
+			tujuan: payload.tujuan,
+			catatan: payload.catatan,
+			createdByName: authorization.user.nama || authorization.user.email,
+			createdByEmail: authorization.user.email,
+			status: "SAH",
+		};
+	}
+
+	const existingAudit = rowsToRecords(auditData).find((record) => record.AUDIT_ID === auditId);
+	const auditRecord: Record<string, string | number> = {
+		AUDIT_ID: auditId,
+		TIMESTAMP: result.timestamp,
+		USER_EMAIL: authorization.user.email,
+		USER_NAME: result.createdByName,
+		ACTION: "CREATE",
+		MODULE: "TRANSACTION",
+		RECORD_ID: transactionId,
+		BEFORE_JSON: "",
+		AFTER_JSON: JSON.stringify(transactionRecord(result)),
+		CATATAN: `Rekod Barang Keluar ${transactionId}`,
+	};
+
+	if (!existingTransaction) {
+		await appendSheetRecord(
+			env,
+			env.TRANSACTIONS_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(transactionsData),
+			transactionRecord(result),
+		);
+	}
+	if (!existingAudit) {
+		await appendSheetRecord(
+			env,
+			env.AUDIT_LOG_SHEET,
+			authorization.googleAccessToken,
+			sheetHeaders(auditData),
+			auditRecord,
+		);
+	}
+
+	return Response.json(
+		{ success: true, replayed: Boolean(existingTransaction), transaction: result },
+		{ status: existingTransaction ? 200 : 201 },
+	);
+}
+
 export default {
 	async fetch(request, env): Promise<Response> {
 		const origin = request.headers.get("Origin");
@@ -1945,7 +2520,9 @@ export default {
 		) {
 			try {
 				return addCorsHeaders(
-					await protectedRoute(request, env, url.pathname),
+					url.pathname === "/api/me"
+						? await meRoute(request, env)
+						: await protectedRoute(request, env, url.pathname),
 					origin,
 				);
 			} catch (error) {
@@ -1966,6 +2543,52 @@ export default {
 					}));
 				}
 				return addCorsHeaders(errorResponse(apiError), origin);
+			}
+		}
+
+		if (request.method === "GET" && url.pathname === "/api/users") {
+			try {
+				return addCorsHeaders(await userListRoute(request, env), origin);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(500, "INTERNAL_ERROR", "Pengguna tidak dapat dimuatkan.");
+				if (apiError.status >= 500) console.error(JSON.stringify({
+					message: "user list route failed",
+					code: apiError.code,
+					path: url.pathname,
+					status: apiError.status,
+				}));
+				return addCorsHeaders(errorResponse(apiError), origin);
+			}
+		}
+
+		const accessDecisionMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/(approve|reject)$/);
+		if (request.method === "POST" && accessDecisionMatch) {
+			try {
+				return addCorsHeaders(
+					await decideAccessRoute(
+						request,
+						env,
+						accessDecisionMatch[1],
+						accessDecisionMatch[2] as "approve" | "reject",
+					),
+					origin,
+				);
+			} catch (error) {
+				const apiError = error instanceof ApiError
+					? error
+					: new ApiError(500, "WRITE_FAILED", "Keputusan akses tidak dapat disimpan.");
+				const safeError = apiError.status >= 500 && !["AUTH_CONFIG_ERROR", "AUTH_SERVICE_ERROR"].includes(apiError.code)
+					? new ApiError(500, "WRITE_FAILED", "Keputusan akses tidak dapat disimpan.")
+					: apiError;
+				if (safeError.status >= 500) console.error(JSON.stringify({
+					message: "access decision route failed",
+					code: safeError.code,
+					path: url.pathname,
+					status: safeError.status,
+				}));
+				return addCorsHeaders(errorResponse(safeError), origin);
 			}
 		}
 
@@ -2046,11 +2669,13 @@ export default {
 
 		if (
 			request.method === "POST" &&
-			url.pathname === "/api/transactions/in"
+			(url.pathname === "/api/transactions/in" || url.pathname === "/api/transactions/out")
 		) {
 			try {
 				return addCorsHeaders(
-					await incomingTransactionRoute(request, env),
+					url.pathname.endsWith("/out")
+						? await outgoingTransactionRoute(request, env)
+						: await incomingTransactionRoute(request, env),
 					origin,
 				);
 			} catch (error) {
@@ -2068,7 +2693,7 @@ export default {
 
 				if (safeError.status >= 500) {
 					console.error(JSON.stringify({
-						message: "incoming transaction route failed",
+						message: "inventory transaction route failed",
 						code: safeError.code,
 						path: url.pathname,
 						status: safeError.status,

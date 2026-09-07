@@ -11,6 +11,8 @@ ITU eSTOR ialah sistem pengurusan stok dan bekalan Institut Teknologi Unggas. Fr
 
 > **Status disahkan — 3 Ogos 2026:** Daftar Item Baharu, Barang Masuk, pengiraan stok semasa, pintasan Tambah Stok, sejarah transaksi dan pembatalan transaksi telah aktif di produksi. Jumlah item produksi ialah 130.
 
+> **Diterbitkan — 7 September 2026:** Barang Keluar, sunting/status item, serta permohonan akses automatik dan kelulusan pengguna oleh `SUPER_ADMIN` telah siap dan lulus 126 ujian. Cloudflare Worker production telah dideploy dan relay Google Apps Script menghantar e-mel kelulusan melalui `itumelaka@gmail.com`.
+
 ## Seni bina semasa
 
 ```text
@@ -22,6 +24,7 @@ Cloudflare Worker
         |-- sahkan token melalui Supabase /auth/v1/user
         |-- semak EMAIL, STATUS dan ROLE dalam USERS
         |-- validasi, pengiraan, idempotensi dan audit
+        |-- panggil relay Google Apps Script bertandatangan untuk e-mel kelulusan
         v
 Google Sheets API
         |-- MASTER_ITEM
@@ -88,7 +91,7 @@ Sebelum go-live, kemas kini legasi perlu dihentikan sementara untuk rekonsiliasi
 - Barang Keluar belum aktif.
 - Permohonan, kelulusan dan penyerahan belum aktif.
 - Sunting metadata atau pengaktifan semula item belum aktif.
-- UI pengurusan pengguna/peranan, paparan audit, tetapan dan laporan belum aktif.
+- UI paparan audit, tetapan dan laporan belum aktif.
 - Penulisan status transaksi dan append audit di Google Sheets tidak atomik. Pemulihan retry telah dilaksanakan, tetapi penulisan pertama yang benar-benar serentak masih mempunyai tetingkap perlumbaan kecil; penguncian kuat pada masa hadapan mungkin memerlukan Durable Objects atau D1.
 - Rekonsiliasi akhir dan prosedur go-live rasmi masih perlu dilengkapkan.
 

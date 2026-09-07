@@ -79,7 +79,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .auth-state.is-ready { display: none; }
 .auth-state.is-error { color: #85281f; background: #f9e1dd; border-color: #efc1ba; }
 .auth-state:not(.is-loading) .loading-spinner { display: none; }
-.google-login, .auth-retry {
+.google-login, .auth-retry, .auth-secondary {
   width: 100%; min-height: 48px; align-items: center; justify-content: center; gap: 11px;
   padding: 10px 17px; color: #26313d; background: #fff; border: 1px solid #d8d4cf;
   border-radius: 13px; box-shadow: var(--clay); cursor: pointer; font-size: 13px; font-weight: 900;
@@ -92,6 +92,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .google-login:disabled, .logout-button:disabled { opacity: .6; cursor: wait; }
 .auth-retry:not([hidden]) { display: block; margin-top: 9px; color: #fff; background: var(--blue); border: 0; }
+.auth-secondary:not([hidden]) { display: block; margin-top: 9px; color: var(--blue-dark); background: transparent; box-shadow: none; }
 
 .sidebar {
   position: fixed;
@@ -358,6 +359,7 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
 }
 .incoming-form textarea { min-height: 96px; resize: vertical; }
 .incoming-notes-field textarea { min-height: 116px; }
+.outgoing-notes-field textarea { min-height: 82px; }
 .incoming-form input:focus-visible, .incoming-form select:focus-visible,
 .incoming-form textarea:focus-visible, .incoming-submit button:focus-visible {
   outline: 3px solid rgba(32,104,174,.25); outline-offset: 2px; border-color: var(--blue);
@@ -385,6 +387,23 @@ td { padding: 6px; border-top: 1px solid #e7dfd6; white-space: nowrap; }
 }
 .incoming-submit button:disabled { cursor: wait; opacity: .62; }
 .incoming-guide { align-self: start; padding: 18px; color: #55483e; background: #fff0cf; }
+.outgoing-guide { background: #e9f4e7; }
+.outgoing-submit { background: #e6f2e4; }
+.outgoing-submit strong { color: #285c35; }
+.outgoing-submit strong.is-negative { color: var(--red); }
+.outgoing-submit button { background: linear-gradient(145deg, #58aa4b, #347e36); }
+.user-table td:first-child strong, .user-table td:first-child small { display: block; }
+.user-table td:first-child small { margin-top: 3px; color: var(--muted); }
+.user-decision-controls { display: flex; align-items: center; gap: 6px; }
+.user-decision-controls select, .user-decision-controls button {
+  min-height: 34px; padding: 6px 9px; border: 1px solid #d8d0c7; border-radius: 9px;
+}
+.user-decision-controls button { color: #fff; border: 0; cursor: pointer; font-weight: 800; }
+.user-decision-controls button:disabled { cursor: wait; opacity: .55; }
+.approve-user { background: var(--green); }
+.reject-user { background: var(--red); }
+.user-decision-complete { color: var(--muted); font-size: 10px; font-weight: 700; }
+.user-cards .user-decision-controls { flex-wrap: wrap; margin-top: 10px; }
 .incoming-guide p, .incoming-guide li { font-size: 11px; line-height: 1.6; }
 .incoming-guide ul { margin: 14px 0 0; padding-left: 19px; }
 .incoming-guide li + li { margin-top: 7px; }
