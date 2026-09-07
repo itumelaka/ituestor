@@ -385,4 +385,4 @@ Kerja seterusnya:
 3. Sunting metadata serta nyahaktif/aktif semula item.
 4. UI pengguna/peranan, audit, tetapan dan laporan.
 5. Rekonsiliasi akhir dan prosedur go-live.
-6. Penerbitan Google OAuth keluar daripada status `Testing`.
+6. Google OAuth telah diterbitkan sebagai `In production` untuk pengguna External pada 7 September 2026.

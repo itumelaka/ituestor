@@ -11,7 +11,7 @@ ITU eSTOR ialah sistem pengurusan stok dan bekalan Institut Teknologi Unggas. Fr
 
 > **Status disahkan — 3 Ogos 2026:** Daftar Item Baharu, Barang Masuk, pengiraan stok semasa, pintasan Tambah Stok, sejarah transaksi dan pembatalan transaksi telah aktif di produksi. Jumlah item produksi ialah 130.
 
-> **Diterbitkan — 7 September 2026:** Barang Keluar, sunting/status item, serta permohonan akses automatik dan kelulusan pengguna oleh `SUPER_ADMIN` telah siap dan lulus 126 ujian. Cloudflare Worker production telah dideploy dan relay Google Apps Script menghantar e-mel kelulusan melalui `itumelaka@gmail.com`.
+> **Diterbitkan — 7 September 2026:** Barang Keluar, sunting/status item, serta permohonan akses automatik dan kelulusan pengguna oleh `SUPER_ADMIN` telah siap dan lulus 126 ujian. Cloudflare Worker production telah dideploy, relay Google Apps Script menghantar e-mel kelulusan melalui `itumelaka@gmail.com`, dan Google OAuth kini `In production` untuk pengguna External.
 
 ## Seni bina semasa
 
@@ -87,7 +87,6 @@ Sebelum go-live, kemas kini legasi perlu dihentikan sementara untuk rekonsiliasi
 
 ## Batasan dan kerja seterusnya
 
-- Google OAuth masih berstatus `Testing`.
 - Barang Keluar belum aktif.
 - Permohonan, kelulusan dan penyerahan belum aktif.
 - Sunting metadata atau pengaktifan semula item belum aktif.

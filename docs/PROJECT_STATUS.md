@@ -2,7 +2,7 @@
 
 **Tarikh status disahkan:** 7 September 2026
 
-> Checkpoint produksi 7 September 2026: Barang Keluar, pengurusan metadata/status item, serta aliran permohonan dan kelulusan akses pengguna telah dilaksanakan. Suite mengandungi 126 ujian lulus. Cloudflare Worker production versi `a104cb10-6599-4d89-9a64-4fd5b9cba394` telah dideploy dengan relay Google Apps Script bagi notifikasi kelulusan melalui `itumelaka@gmail.com`.
+> Checkpoint produksi 7 September 2026: Barang Keluar, pengurusan metadata/status item, serta aliran permohonan dan kelulusan akses pengguna telah dilaksanakan. Suite mengandungi 126 ujian lulus. Cloudflare Worker production versi `a104cb10-6599-4d89-9a64-4fd5b9cba394` telah dideploy dengan relay Google Apps Script bagi notifikasi kelulusan melalui `itumelaka@gmail.com`. Google OAuth berstatus `In production` dengan pengguna External.
 
 ## Ringkasan
 
@@ -128,7 +128,7 @@ Selepas pembatalan, stok Bateri D kembali kepada 0, nilai kembali kepada RM0.00,
 - [ ] Tetapan.
 - [ ] Laporan.
 - [ ] Rekonsiliasi akhir dan prosedur go-live.
-- [ ] Google OAuth keluar daripada status `Testing`.
+- [x] Google OAuth keluar daripada status `Testing` dan diterbitkan untuk pengguna External.
 
 ## Batasan teknikal
 
